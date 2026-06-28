@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+pydantic
+PyMySQL
+python-dotenv
+passlib[argon2]
+PyJWT
+cryptography       # AES-256 for BYOK key encryption
+gliner             # local GLiNER2; prod calls the Railway/Render service over HTTP
+sentence-transformers
+ruff
+pytest
+httpx

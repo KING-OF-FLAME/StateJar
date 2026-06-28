@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Node / Vite
+node_modules/
+dist/
+.vite/
+
+# Env & secrets — never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Local DB / XAMPP scratch
+*.sqlite
+*.db
+
+# Build artifacts
+*.log
+
+# Project scratch — not for public submission (kept locally only)
+.claude/
+T.txt
+_*.txt
+_pdfimg/
+_*.png
+_*.pdf
+*.docx
+*.pdf

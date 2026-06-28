@@ -1,0 +1,23 @@
+{
+  "version": 2,
+  "buildCommand": "cd frontend && npm install && npm run build",
+  "outputDirectory": "frontend/dist",
+  "functions": {
+    "backend/app/main.py": { "runtime": "@vercel/python@3.x" }
+  },
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "backend/app/main.py" }
+  ],
+  "env": {
+    "GLINER2_URL": "@gliner2-url",
+    "DATABASE_URL": "@database-url",
+    "JWT_SECRET": "@jwt-secret",
+    "AES_KEY": "@aes-key"
+  },
+  "_notes": [
+    "GLiNER2 runs as a separate Railway/Render service — set GLINER2_URL in the Vercel dashboard.",
+    "DATABASE_URL points to hosted MySQL (PlanetScale/Aiven). Run prod migrations before deploying.",
+    "JWT_SECRET and AES_KEY (BYOK key encryption) must be set in the Vercel dashboard, never in git.",
+    "Secret scan must be clean before `vercel --prod`."
+  ]
+}
