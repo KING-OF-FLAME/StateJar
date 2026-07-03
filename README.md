@@ -64,7 +64,7 @@ flowchart LR
 
 ## Live Demo
 
-🔗 **[statejar.vercel.app](https://statejar.com)** *(link placeholder — see `docs/deployment.md`)*
+🔗 **[statejar.com](https://statejar.com)** *(link placeholder — see `docs/deployment.md`)*
 
 ### Screenshots
 
