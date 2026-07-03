@@ -95,6 +95,53 @@ def test_unknown_provider_rejected(client: TestClient) -> None:
     assert resp.status_code == 422
 
 
+def test_list_keys_empty(client: TestClient) -> None:
+    headers = _auth_headers(client)
+    resp = client.get("/api/v1/keys/provider", headers=headers)
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+def test_list_keys_requires_auth(client: TestClient) -> None:
+    assert client.get("/api/v1/keys/provider").status_code == 401
+
+
+def test_list_keys_returns_latest_per_provider_masked(client: TestClient) -> None:
+    headers = _auth_headers(client)
+    for key in ("sk-or-v1-oldkey1111", "sk-or-v1-newkey2222"):
+        client.post(
+            "/api/v1/keys/provider",
+            json={"provider": "openrouter", "api_key": key},
+            headers=headers,
+        )
+    resp = client.get("/api/v1/keys/provider", headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    # only the latest openrouter key, masked to last 4 chars
+    assert len(body) == 1
+    assert body[0]["provider"] == "openrouter"
+    assert body[0]["key_last4"] == "2222"
+    assert body[0]["created_at"]
+    assert "sk-or" not in str(body)
+
+
+def test_list_keys_scoped_to_current_user(client: TestClient) -> None:
+    headers_a = _auth_headers(client)
+    client.post(
+        "/api/v1/keys/provider",
+        json={"provider": "openrouter", "api_key": "sk-or-v1-userakey7777"},
+        headers=headers_a,
+    )
+    client.post("/api/v1/auth/signup", json={"email": "b@example.com", "password": "s3cretpass"})
+    token_b = client.post(
+        "/api/v1/auth/login", json={"email": "b@example.com", "password": "s3cretpass"}
+    ).json()["access_token"]
+    resp = client.get(
+        "/api/v1/keys/provider", headers={"Authorization": f"Bearer {token_b}"}
+    )
+    assert resp.json() == []
+
+
 def test_build_system_context() -> None:
     ctx = build_system_context("shm_" + "a" * 40, {"preferences": {"contact_mode": "email"}})
     assert ctx.startswith("Known user state (retrieved via StateJar handle shm_")

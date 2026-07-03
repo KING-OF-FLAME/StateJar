@@ -143,3 +143,41 @@ def save_provider_key(
     db.commit()
     # never return the key again — only the last 4 chars
     return ProviderKeyOut(provider=provider, key_last4=body.api_key[-4:])
+
+
+class SavedKeyOut(BaseModel):
+    provider: str
+    key_last4: str
+    created_at: str
+
+
+@router.get("/provider", response_model=list[SavedKeyOut])
+def list_provider_keys(
+    user: UserOut = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[SavedKeyOut]:
+    """Latest saved key per provider — last 4 chars only, never the full key."""
+    rows = db.execute(
+        select(
+            provider_keys.c.provider,
+            provider_keys.c.encrypted_key,
+            provider_keys.c.created_at,
+        )
+        .where(provider_keys.c.user_id == user.id)
+        .order_by(provider_keys.c.id.desc())
+    ).mappings()
+
+    out: list[SavedKeyOut] = []
+    seen: set[str] = set()
+    for row in rows:
+        if row["provider"] in seen:
+            continue
+        seen.add(row["provider"])
+        out.append(
+            SavedKeyOut(
+                provider=row["provider"],
+                key_last4=decrypt_key(row["encrypted_key"])[-4:],
+                created_at=row["created_at"].isoformat(),
+            )
+        )
+    return out

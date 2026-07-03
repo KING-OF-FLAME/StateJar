@@ -1,5 +1,7 @@
 """StateJar FastAPI application entrypoint."""
 
+from contextlib import asynccontextmanager
+
 from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -10,7 +12,33 @@ from app.memory.routes import router as memory_router
 
 settings = get_settings()
 
-app = FastAPI(title="StateJar", version="0.1.0")
+
+def _ensure_tables() -> None:
+    """Create any missing tables so saved data survives restarts.
+
+    Best-effort: if the DB is unreachable (e.g. tests overriding get_db
+    with their own engine), requests will surface the real error instead.
+    """
+    from app.auth.models import auth_metadata
+    from app.database import engine
+    from app.llm.gateway import llm_metadata
+    from app.memory.audit import audit_metadata
+    from app.memory.storage import metadata as storage_metadata
+
+    try:
+        for md in (auth_metadata, storage_metadata, audit_metadata, llm_metadata):
+            md.create_all(engine, checkfirst=True)
+    except Exception:  # noqa: BLE001 — DB down at boot must not kill the app
+        pass
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    _ensure_tables()
+    yield
+
+
+app = FastAPI(title="StateJar", version="0.1.0", lifespan=_lifespan)
 
 app.add_middleware(
     CORSMiddleware,

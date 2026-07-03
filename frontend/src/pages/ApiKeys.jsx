@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api } from '../lib/api.js'
 
 export default function ApiKeys() {
@@ -6,6 +6,17 @@ export default function ApiKeys() {
   const [saved, setSaved] = useState(null) // {provider, key_last4}
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    api('/keys/provider')
+      .then((keys) => {
+        const k = keys.find((x) => x.provider === 'openrouter')
+        if (k) setSaved(k)
+      })
+      .catch(() => {}) // treat as "no key yet"
+      .finally(() => setLoading(false))
+  }, [])
 
   const save = async (e) => {
     e.preventDefault()
@@ -38,7 +49,9 @@ export default function ApiKeys() {
 
       <div className="panel" style={{ maxWidth: 560 }}>
         <h3>OpenRouter</h3>
-        {saved ? (
+        {loading ? (
+          <p className="empty-note">Checking for a saved key…</p>
+        ) : saved ? (
           <div className="key-saved">
             <span className="mono">sk-or-••••••••••••{saved.key_last4}</span>
             <span className="key-badge">saved ✓</span>
