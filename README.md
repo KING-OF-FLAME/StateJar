@@ -236,7 +236,7 @@ MIT — see [LICENSE](LICENSE).
 
 <p align="center"><img src="docs/assets/logo.png" width="60"/></p>
 
-<p align="center"><sub>Indian Patent No. 202621017626 · Yash Raj, Dr. Amol B. Kasture</sub></p>
+<p align="center"><sub>Indian Patent No. 202621017626 </sub></p>
 
 <p align="center">Built with ❤️ by <b>Team Hello World</b> — Yash Raj</p>
 
