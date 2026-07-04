@@ -74,7 +74,7 @@ flowchart LR
 
 | Minimal retrieval | Handle timeline |
 |---|---|
-| ![Retrieved context](docs/screenshots/retrieved.png) | ![Handles](docs/screenshots/handles.png) |
+| ![Retrieved context](docs/screenshots/retrieval.png) | ![Handles](docs/screenshots/handles.png) |
 
 ## Local Setup
 
