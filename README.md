@@ -2,11 +2,7 @@
 
 **Deterministic, minimal-disclosure memory for multi-session conversational AI — no transcripts, no drift, no token burn.**
 
-![Python](https://img.shields.io/badge/Python-3.12+-3776AB?logo=python&logoColor=white)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white)
-![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)
-![MySQL](https://img.shields.io/badge/MySQL-8-4479A1?logo=mysql&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-65%20passing-6B9080)
+![Python](https://img.shields.io/badge/Python-3.12+-3776AB?logo=python&logoColor=white) ![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white) ![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black) ![MySQL](https://img.shields.io/badge/MySQL-8-4479A1?logo=mysql&logoColor=white) ![Tests](https://img.shields.io/badge/tests-65%20passing-6B9080)
 
 **Team: Hello World** · Hack4Humanity 2026 · AI for Societal Good Track
 
@@ -51,16 +47,16 @@ flowchart LR
 
 | # | Module | File | What it does |
 |---|--------|------|--------------|
-| 1 | State Extraction | `backend/app/memory/extractor.py` | Text → structured state (facts, preferences, constraints, goals, unresolved) |
-| 2 | Canonicalization | `backend/app/memory/canonicalizer.py` | Deterministic canonical JSON — wording/order/format invariant |
-| 3 | Handle Generation | `backend/app/memory/handle.py` | Content-addressed `shm_` handles via SHA-256 |
-| 4 | Deduplicated Storage | `backend/app/memory/storage.py` | INSERT-IGNORE store; identical meaning stored once |
-| 5 | No Full Chat Replay | `backend/app/memory/storage.py` | Hard guard: raw transcripts are rejected at write time |
-| 6 | Minimal Disclosure Retrieval | `backend/app/memory/retriever.py` | Intent-mapped subset selection + tokens-saved metric |
+| 1 | State Extraction | `backend/app/memory/extractor.py` | Text → structured state |
+| 2 | Canonicalization | `backend/app/memory/canonicalizer.py` | Deterministic canonical JSON |
+| 3 | Handle Generation | `backend/app/memory/handle.py` | Content-addressed `shm_` SHA-256 handles |
+| 4 | Deduplicated Storage | `backend/app/memory/storage.py` | Identical meaning stored once |
+| 5 | No Full Chat Replay | `backend/app/memory/storage.py` | Raw transcripts rejected at write time |
+| 6 | Minimal Disclosure Retrieval | `backend/app/memory/retriever.py` | Sends only the fields needed |
 | 7 | Append-Only Versioning | `backend/app/memory/versioning.py` | Updates create new handles; history immutable |
-| 8 | Conflict Preservation | `backend/app/memory/conflict.py` | Contradictions recorded, never silently overwritten |
-| 9 | Cross-Session Consistency | `backend/app/memory/routes.py` | New sessions fall back to the user's latest state |
-| 10 | Audit + Replay | `backend/app/memory/audit.py` | Every LLM call logged (handle + exact fields sent), deterministically replayable — with secret-scrubbing |
+| 8 | Conflict Preservation | `backend/app/memory/conflict.py` | Contradictions recorded, never overwritten |
+| 9 | Cross-Session Consistency | `backend/app/memory/routes.py` | New sessions use latest state |
+| 10 | Audit + Replay | `backend/app/memory/audit.py` | Every LLM call logged, replayable |
 
 ## Live Demo
 
