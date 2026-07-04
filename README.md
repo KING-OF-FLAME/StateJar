@@ -1,36 +1,61 @@
-<p align="center"><img src="docs/assets/logo.png" width="120"/></p>
+<p align="center"><img src="docs/assets/logo.png" width="140"/></p>
 
-# StateJar 🫙
+<h1 align="center">StateJar</h1>
 
-**Deterministic, minimal-disclosure memory for multi-session conversational AI — no transcripts, no drift, no token burn.**
-
-![Python](https://img.shields.io/badge/Python-3.12+-3776AB?logo=python&logoColor=white) ![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white) ![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black) ![MySQL](https://img.shields.io/badge/MySQL-8-4479A1?logo=mysql&logoColor=white) ![Tests](https://img.shields.io/badge/tests-65%20passing-6B9080)
+<p align="center"><i>Deterministic, minimal-disclosure memory for multi-session conversational AI.<br>No transcripts. No drift. No token burn.</i></p>
 
 <p align="center">
-  <a href="https://statejar.com">Live Demo</a> ·
-  <a href="#architecture">Architecture</a> ·
-  <a href="#the-10-patent-modules">Modules</a> ·
-  <a href="#local-setup">Setup</a> ·
-  <a href="#roadmap-round-2">Roadmap</a>
+  <img src="https://img.shields.io/badge/Python-3.12+-3776AB?logo=python&logoColor=white"/>
+  <img src="https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white"/>
+  <img src="https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black"/>
+  <img src="https://img.shields.io/badge/MySQL-8-4479A1?logo=mysql&logoColor=white"/>
+  <img src="https://img.shields.io/badge/tests-65%20passing-6B9080"/>
+  <img src="https://img.shields.io/badge/Patent-202621017626-E07856"/>
 </p>
 
-**Team: Hello World** · Hack4Humanity 2026 · AI for Societal Good Track
+<p align="center">
+  <b><a href="https://statejar.com">Live Demo</a></b> ·
+  <a href="#-architecture">Architecture</a> ·
+  <a href="#-the-10-patent-modules">Modules</a> ·
+  <a href="#-local-setup">Setup</a> ·
+  <a href="#-roadmap-round-2">Roadmap</a>
+</p>
 
-> Based on **Indian Patent No. 202621017626** 
+<p align="center">🏆 <b>Team Hello World</b> · Hack4Humanity 2026 · AI for Societal Good</p>
 
 <p align="center"><img src="docs/gifs/m6_retrieval.gif" width="70%"/></p>
 
-> **TL;DR for judges:** StateJar turns conversations into hash-addressed structured state, so any LLM recalls exactly the facts it needs — ~78% fewer tokens, zero transcripts, fully auditable.
+<table align="center">
+  <tr>
+    <td align="center"><b>~78%</b><br><sub>tokens saved</sub></td>
+    <td align="center"><b>10</b><br><sub>patent modules</sub></td>
+    <td align="center"><b>65</b><br><sub>tests passing</sub></td>
+    <td align="center"><b>SHA-256</b><br><sub>deterministic</sub></td>
+  </tr>
+</table>
+
+> 🎯 **TL;DR** — StateJar turns conversations into hash-addressed structured state, so any LLM recalls exactly the facts it needs: ~78% fewer tokens, zero transcripts, fully auditable.
+
+<table>
+  <tr>
+    <td align="center" width="25%"><b>1 · Extract</b><br><sub>Structured facts from conversation</sub></td>
+    <td align="center" width="25%"><b>2 · Canonicalize</b><br><sub>One deterministic JSON form</sub></td>
+    <td align="center" width="25%"><b>3 · Handle</b><br><sub>SHA-256 → <code>shm_…</code> address</sub></td>
+    <td align="center" width="25%"><b>4 · Retrieve Minimum</b><br><sub>Only the fields needed</sub></td>
+  </tr>
+</table>
+
+<br>
 
 ---
 
-## The Problem
+## 🧩 The Problem
 
 - **Context drift** — every new chat session forgets who you are; assistants re-ask what they already knew.
 - **Token burn** — the standard fix is replaying entire chat histories to the LLM, paying for thousands of irrelevant tokens per request.
 - **Hallucinated memory** — fuzzy vector "memories" retrieve approximately-similar text, not the actual facts, and can't prove what the model was told.
 
-## The Solution
+## 💡 The Solution
 
 StateJar replaces transcript replay with **content-addressed structured state**:
 
@@ -41,7 +66,11 @@ StateJar replaces transcript replay with **content-addressed structured state**:
 
 Memory evolves append-only: updates create new handles linked by `parent_handle`; old states are never modified, and conflicting facts are preserved as explicit conflict records instead of silently overwritten.
 
-## Architecture
+<br>
+
+---
+
+## 🧬 Architecture
 
 ```mermaid
 flowchart LR
@@ -57,7 +86,11 @@ flowchart LR
     G --> A[(Audit log\ndeterministic replay)]
 ```
 
-## The 10 Patent Modules
+<br>
+
+---
+
+## 📦 The 10 Patent Modules
 
 | # | Module | File | What it does |
 |---|--------|------|--------------|
@@ -72,7 +105,11 @@ flowchart LR
 | 9 | Cross-Session Consistency | `backend/app/memory/routes.py` | New sessions use latest state |
 | 10 | Audit + Replay | `backend/app/memory/audit.py` | Every LLM call logged, replayable |
 
-## Module Animations
+<br>
+
+---
+
+## 🎬 Module Animations
 
 *(M6 — Minimal Disclosure Retrieval — is the hero animation at the top.)*
 
@@ -99,7 +136,11 @@ flowchart LR
   </tr>
 </table>
 
-## Live Demo
+<br>
+
+---
+
+## 🌐 Live Demo
 
 🔗 **[statejar.com](https://statejar.com)** — deployed on Vercel + Railway
 
@@ -120,7 +161,14 @@ flowchart LR
   </tr>
 </table>
 
-## Local Setup
+<br>
+
+---
+
+## 🚀 Local Setup
+
+<details>
+<summary><b>🚀 Local Setup (click to expand)</b></summary>
 
 Prereqs: Python 3.12+, Node 18+, XAMPP (MySQL running).
 
@@ -153,25 +201,47 @@ npm run dev                    # → http://localhost:5173
 Sign up → save an OpenRouter key in **API Keys** → open **Playground** → say
 *"My name is Ayaan, I prefer email, budget ₹2000"* → start a **new session** → ask *"Book my delivery"* — watch it retrieve only the 3 fields it needs.
 
-## Tech Stack
+</details>
+
+<br>
+
+---
+
+## 🧰 Tech Stack
 
 FastAPI · SQLAlchemy 2.0 · MySQL · Pydantic v2 · bcrypt + JWT · AES-256-GCM (provider keys) · React 18 + Vite · OpenRouter gateway · pytest (65 tests)
 
-## Benchmark
+## 📊 Benchmark
 
 On the demo scenarios, minimal-disclosure retrieval sends **~48–78% fewer tokens** of context than full-state replay (per-request % is computed live and shown in the Playground). Formal benchmark suite lands in Round 2 — *see Roadmap*.
 
-## Roadmap (Round 2)
+<br>
+
+---
+
+## 🧭 Roadmap (Round 2)
 
 - **GLiNER2 as primary extractor** (rule-based becomes fallback) for open-domain extraction
 - **Benchmark suite** — token savings & consistency vs. transcript-replay and vector-memory baselines
 - **Multi-provider gateway** — native OpenAI / Anthropic / Gemini / Ollama alongside OpenRouter
 - Audit-log UI, org/team workspaces, handle export API
 
-## License
+## 📄 License
 
 MIT — see [LICENSE](LICENSE).
 
+<br>
+
 ---
 
-Built by **Team Hello World** · Yash Raj · Indian Patent No. 202621017626
+<p align="center"><img src="docs/assets/logo.png" width="60"/></p>
+
+<p align="center"><sub>Indian Patent No. 202621017626 · Yash Raj, Dr. Amol B. Kasture</sub></p>
+
+<p align="center">Built with ❤️ by <b>Team Hello World</b> — Yash Raj</p>
+
+<p align="center">
+  <a href="https://statejar.com">Demo</a> ·
+  <a href="https://github.com/KING-OF-FLAME/StateJar/issues">GitHub Issues</a> ·
+  <a href="LICENSE">License</a>
+</p>
