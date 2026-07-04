@@ -209,7 +209,15 @@ Sign up → save an OpenRouter key in **API Keys** → open **Playground** → s
 
 ## 🧰 Tech Stack
 
-FastAPI · SQLAlchemy 2.0 · MySQL · Pydantic v2 · bcrypt + JWT · AES-256-GCM (provider keys) · React 18 + Vite · OpenRouter gateway · pytest (65 tests)
+- FastAPI
+- SQLAlchemy 2.0
+- MySQL
+- Pydantic v2
+- bcrypt + JWT Authentication
+- AES-256-GCM Encryption
+- React 18 + Vite
+- OpenRouter Gateway
+- pytest (65 tests)
 
 ## 📊 Benchmark
 
