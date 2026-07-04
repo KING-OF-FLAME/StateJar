@@ -64,17 +64,27 @@ flowchart LR
 
 ## Live Demo
 
-🔗 **[statejar.com](https://statejar.com)** *(link placeholder — see `docs/deployment.md`)*
+🔗 **[statejar.com](https://statejar.com)** — deployed on Vercel + Railway
 
 ### Screenshots
 
-| Landing | Playground (live memory inspector) |
-|---|---|
-| ![Landing](docs/screenshots/landing.png) | ![Playground](docs/screenshots/playground.png) |
+**Landing**
+<img src="docs/screenshots/landing.png" width="100%" alt="Landing page"/>
 
-| Minimal retrieval | Handle timeline |
-|---|---|
-| ![Retrieved context](docs/screenshots/retrieval.png) | ![Handles](docs/screenshots/handles.png) |
+**Playground — live memory inspector**
+<img src="docs/screenshots/playground.png" width="100%" alt="Playground"/>
+
+**Minimal retrieval (only 2 of 14 fields sent, ~78% tokens saved)**
+<img src="docs/screenshots/retrieval.png" width="100%" alt="Retrieved context"/>
+
+**Handle timeline — append-only versioning**
+<img src="docs/screenshots/handles.png" width="100%" alt="Handles"/>
+
+**Audit trail — provable provenance**
+<img src="docs/screenshots/audit.png" width="100%" alt="Audit log"/>
+
+**Dashboard**
+<img src="docs/screenshots/dashboard.png" width="100%" alt="Dashboard"/>
 
 ## Local Setup
 
