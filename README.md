@@ -58,6 +58,48 @@ flowchart LR
 | 9 | Cross-Session Consistency | `backend/app/memory/routes.py` | New sessions use latest state |
 | 10 | Audit + Replay | `backend/app/memory/audit.py` | Every LLM call logged, replayable |
 
+## Module Animations
+
+**M1 — Structured Memory Capture**
+
+<img src="docs/gifs/m1_extraction.gif" width="100%"/>
+
+**M2 — Deterministic Canonicalization**
+
+<img src="docs/gifs/m2_canonicalize.gif" width="100%"/>
+
+**M3 — Content-Addressed Handles**
+
+<img src="docs/gifs/m3_handle.gif" width="100%"/>
+
+**M4 — Deduplicated Storage**
+
+<img src="docs/gifs/m4_storage.gif" width="100%"/>
+
+**M5 — No Full Chat Replay**
+
+<img src="docs/gifs/m5_no_replay.gif" width="100%"/>
+
+**M6 — Minimal Disclosure Retrieval**
+
+<img src="docs/gifs/m6_retrieval.gif" width="100%"/>
+
+**M7 — Append-Only Versioning**
+
+<img src="docs/gifs/m7_versioning.gif" width="100%"/>
+
+**M8 — Conflict Preservation**
+
+<img src="docs/gifs/m8_conflict.gif" width="100%"/>
+
+**M9 — Cross-Session Consistency**
+
+<img src="docs/gifs/m9_cross_session.gif" width="100%"/>
+
+**M10 — Audit Trail + Deterministic Replay**
+
+<img src="docs/gifs/m10_audit.gif" width="100%"/>
+
 ## Live Demo
 
 🔗 **[statejar.com](https://statejar.com)** — deployed on Vercel + Railway
