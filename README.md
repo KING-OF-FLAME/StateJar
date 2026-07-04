@@ -6,7 +6,7 @@
 
 **Team: Hello World** · Hack4Humanity 2026 · AI for Societal Good Track
 
-> Based on **Indian Patent No. 202621017626** — *Yash Raj, Dr. Amol B. Kasture*
+> Based on **Indian Patent No. 202621017626** 
 
 ---
 
