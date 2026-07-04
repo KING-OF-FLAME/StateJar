@@ -1,12 +1,26 @@
+<p align="center"><img src="docs/assets/logo.png" width="120"/></p>
+
 # StateJar 🫙
 
 **Deterministic, minimal-disclosure memory for multi-session conversational AI — no transcripts, no drift, no token burn.**
 
 ![Python](https://img.shields.io/badge/Python-3.12+-3776AB?logo=python&logoColor=white) ![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white) ![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black) ![MySQL](https://img.shields.io/badge/MySQL-8-4479A1?logo=mysql&logoColor=white) ![Tests](https://img.shields.io/badge/tests-65%20passing-6B9080)
 
+<p align="center">
+  <a href="https://statejar.com">Live Demo</a> ·
+  <a href="#architecture">Architecture</a> ·
+  <a href="#the-10-patent-modules">Modules</a> ·
+  <a href="#local-setup">Setup</a> ·
+  <a href="#roadmap-round-2">Roadmap</a>
+</p>
+
 **Team: Hello World** · Hack4Humanity 2026 · AI for Societal Good Track
 
 > Based on **Indian Patent No. 202621017626** 
+
+<p align="center"><img src="docs/gifs/m6_retrieval.gif" width="70%"/></p>
+
+> **TL;DR for judges:** StateJar turns conversations into hash-addressed structured state, so any LLM recalls exactly the facts it needs — ~78% fewer tokens, zero transcripts, fully auditable.
 
 ---
 
@@ -60,45 +74,30 @@ flowchart LR
 
 ## Module Animations
 
-**M1 — Structured Memory Capture**
+*(M6 — Minimal Disclosure Retrieval — is the hero animation at the top.)*
 
-<img src="docs/gifs/m1_extraction.gif" width="100%"/>
-
-**M2 — Deterministic Canonicalization**
-
-<img src="docs/gifs/m2_canonicalize.gif" width="100%"/>
-
-**M3 — Content-Addressed Handles**
-
-<img src="docs/gifs/m3_handle.gif" width="100%"/>
-
-**M4 — Deduplicated Storage**
-
-<img src="docs/gifs/m4_storage.gif" width="100%"/>
-
-**M5 — No Full Chat Replay**
-
-<img src="docs/gifs/m5_no_replay.gif" width="100%"/>
-
-**M6 — Minimal Disclosure Retrieval**
-
-<img src="docs/gifs/m6_retrieval.gif" width="100%"/>
-
-**M7 — Append-Only Versioning**
-
-<img src="docs/gifs/m7_versioning.gif" width="100%"/>
-
-**M8 — Conflict Preservation**
-
-<img src="docs/gifs/m8_conflict.gif" width="100%"/>
-
-**M9 — Cross-Session Consistency**
-
-<img src="docs/gifs/m9_cross_session.gif" width="100%"/>
-
-**M10 — Audit Trail + Deterministic Replay**
-
-<img src="docs/gifs/m10_audit.gif" width="100%"/>
+<table>
+  <tr>
+    <td width="50%"><b>M1 — Structured Memory Capture</b><br><img src="docs/gifs/m1_extraction.gif" width="100%"/></td>
+    <td width="50%"><b>M2 — Deterministic Canonicalization</b><br><img src="docs/gifs/m2_canonicalize.gif" width="100%"/></td>
+  </tr>
+  <tr>
+    <td width="50%"><b>M3 — Content-Addressed Handles</b><br><img src="docs/gifs/m3_handle.gif" width="100%"/></td>
+    <td width="50%"><b>M4 — Deduplicated Storage</b><br><img src="docs/gifs/m4_storage.gif" width="100%"/></td>
+  </tr>
+  <tr>
+    <td width="50%"><b>M5 — No Full Chat Replay</b><br><img src="docs/gifs/m5_no_replay.gif" width="100%"/></td>
+    <td width="50%"><b>M7 — Append-Only Versioning</b><br><img src="docs/gifs/m7_versioning.gif" width="100%"/></td>
+  </tr>
+  <tr>
+    <td width="50%"><b>M8 — Conflict Preservation</b><br><img src="docs/gifs/m8_conflict.gif" width="100%"/></td>
+    <td width="50%"><b>M9 — Cross-Session Consistency</b><br><img src="docs/gifs/m9_cross_session.gif" width="100%"/></td>
+  </tr>
+  <tr>
+    <td width="50%"><b>M10 — Audit Trail + Deterministic Replay</b><br><img src="docs/gifs/m10_audit.gif" width="100%"/></td>
+    <td width="50%"></td>
+  </tr>
+</table>
 
 ## Live Demo
 
@@ -106,23 +105,20 @@ flowchart LR
 
 ### Screenshots
 
-**Landing**
-<img src="docs/screenshots/landing.png" width="100%" alt="Landing page"/>
-
-**Playground — live memory inspector**
-<img src="docs/screenshots/playground.png" width="100%" alt="Playground"/>
-
-**Minimal retrieval (only 2 of 14 fields sent, ~78% tokens saved)**
-<img src="docs/screenshots/retrieval.png" width="100%" alt="Retrieved context"/>
-
-**Handle timeline — append-only versioning**
-<img src="docs/screenshots/handles.png" width="100%" alt="Handles"/>
-
-**Audit trail — provable provenance**
-<img src="docs/screenshots/audit.png" width="100%" alt="Audit log"/>
-
-**Dashboard**
-<img src="docs/screenshots/dashboard.png" width="100%" alt="Dashboard"/>
+<table>
+  <tr>
+    <td width="50%"><b>Landing</b><br><img src="docs/screenshots/landing.png" width="100%" alt="Landing page"/></td>
+    <td width="50%"><b>Playground — live memory inspector</b><br><img src="docs/screenshots/playground.png" width="100%" alt="Playground"/></td>
+  </tr>
+  <tr>
+    <td width="50%"><b>Minimal retrieval (2 of 14 fields sent, ~78% tokens saved)</b><br><img src="docs/screenshots/retrieval.png" width="100%" alt="Retrieved context"/></td>
+    <td width="50%"><b>Handle timeline — append-only versioning</b><br><img src="docs/screenshots/handles.png" width="100%" alt="Handles"/></td>
+  </tr>
+  <tr>
+    <td width="50%"><b>Audit trail — provable provenance</b><br><img src="docs/screenshots/audit.png" width="100%" alt="Audit log"/></td>
+    <td width="50%"><b>Dashboard</b><br><img src="docs/screenshots/dashboard.png" width="100%" alt="Dashboard"/></td>
+  </tr>
+</table>
 
 ## Local Setup
 
