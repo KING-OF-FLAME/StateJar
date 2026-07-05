@@ -4,7 +4,7 @@
 
 - Website / live demo: https://statejar.com
 - GitHub: https://github.com/KING-OF-FLAME/StateJar
-- Patent: Indian Patent No. 202621017626 (Yash Raj, Dr. Amol B. Kasture)
+- Patent: Indian Patent No. 202621017626
 - Built by Team Hello World · Hack4Humanity 2026 · AI for Societal Good
 - License: Proprietary · All Rights Reserved · Indian Patent 202621017626 (shared for Hack4Humanity 2026 evaluation)
 
