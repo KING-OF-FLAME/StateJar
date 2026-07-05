@@ -135,61 +135,79 @@ function Counter({ value, suffix }) {
   )
 }
 
-/* Module card: video plays on hover (desktop) or tap (touch). */
-function ModuleCard({ num, title, body, delay }) {
-  const vidRef = useRef(null)
-  const [playing, setPlaying] = useState(false)
-  const idx = num.slice(1)
+/* Lightbox modal shared by all module cards. */
+function VideoModal({ module: mod, onClose }) {
+  useEffect(() => {
+    const onKey = (e) => e.key === 'Escape' && onClose()
+    window.addEventListener('keydown', onKey)
+    document.body.style.overflow = 'hidden'
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      document.body.style.overflow = ''
+    }
+  }, [onClose])
 
-  const play = () => {
-    vidRef.current?.play().catch(() => {})
-    setPlaying(true)
-  }
-  const pause = () => {
-    vidRef.current?.pause()
-    setPlaying(false)
-  }
+  if (!mod) return null
+  const [num, title, body] = mod
 
   return (
-    <Reveal
-      className={`module${playing ? ' playing' : ''}`}
-      delay={delay}
-      onMouseEnter={play}
-      onMouseLeave={pause}
-      onClick={() => (playing ? pause() : play())}
-    >
-      <div className="module-media">
+    <div className="lightbox" role="dialog" aria-modal="true" aria-label={`${title} video`} onClick={onClose}>
+      <div className="lightbox-panel" onClick={(e) => e.stopPropagation()}>
+        <button className="lightbox-close" onClick={onClose} aria-label="Close video">✕</button>
         <video
-          ref={vidRef}
-          src={`/videos/m${idx}.mp4#t=0.1`}
-          muted
+          key={num}
+          src={`/videos/m${num.slice(1)}.mp4`}
+          autoPlay
           loop
+          muted
           playsInline
-          preload="metadata"
           aria-label={`${title} module animation`}
         />
+        <div className="lightbox-caption">
+          <span className="m-num mono">{num}</span>
+          <h3>{title}</h3>
+          <p>{body}</p>
+        </div>
       </div>
-      <span className="m-num mono">{num}</span>
-      <h3>{title}</h3>
-      <p>{body}</p>
-    </Reveal>
+    </div>
   )
 }
 
 export default function Landing() {
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [scrolled, setScrolled] = useState(false)
+  const [activeModule, setActiveModule] = useState(null)
+
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 8)
+    onScroll()
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => window.removeEventListener('scroll', onScroll)
+  }, [])
+
+  const closeMenu = () => setMenuOpen(false)
+
   return (
     <>
-      <nav className="nav" aria-label="Main navigation">
+      <nav className={`nav${scrolled ? ' nav-scrolled' : ''}`} aria-label="Main navigation">
         <div className="container nav-inner">
           <a className="brand" href="/">
             <img className="brand-logo" src="/logo.png" alt="StateJar logo — a jar holding structured memory" />
             State<span className="jar">Jar</span>
           </a>
-          <div className="nav-links">
-            <a href="#problem">Why StateJar</a>
-            <a href="#how">How it works</a>
-            <a href="#modules">Patent modules</a>
-            <a className="btn btn-ghost" href="/playground" style={{ padding: '8px 18px' }}>Open the Playground</a>
+          <button
+            className="nav-burger"
+            aria-label={menuOpen ? 'Close menu' : 'Open menu'}
+            aria-expanded={menuOpen}
+            onClick={() => setMenuOpen((v) => !v)}
+          >
+            {menuOpen ? '✕' : '☰'}
+          </button>
+          <div className={`nav-links${menuOpen ? ' open' : ''}`}>
+            <a href="#problem" onClick={closeMenu}>Why StateJar</a>
+            <a href="#how" onClick={closeMenu}>How it works</a>
+            <a href="#modules" onClick={closeMenu}>Patent modules</a>
+            <a className="btn btn-ghost btn-nav" href="/playground" onClick={closeMenu}>Open the Playground</a>
           </div>
         </div>
       </nav>
@@ -220,7 +238,12 @@ export default function Landing() {
             />
           </div>
 
-          <div className="hero-handle fade-item" style={{ '--d': '400ms' }} aria-hidden="true">
+          <p className="trust-strip fade-item" style={{ '--d': '380ms' }}>
+            Indian Patent 202621017626 <span aria-hidden="true">·</span> SHA-256 deterministic{' '}
+            <span aria-hidden="true">·</span> BYOK encrypted (AES-256-GCM)
+          </p>
+
+          <div className="hero-handle fade-item" style={{ '--d': '440ms' }} aria-hidden="true">
             <div><span className="dim">$</span> statejar ingest <span className="dim">"Budget is under ₹2000, prefer email."</span></div>
             <div style={{ marginTop: 10 }}>
               <span className="dim">handle</span>&nbsp;&nbsp;<span className="hl">shm_8f3a9c41be07d5a2c6f13e9048a7b5c2e6f04d21</span>
@@ -266,7 +289,7 @@ export default function Landing() {
         </div>
       </section>
 
-      <section id="how" style={{ background: '#F4F0EA', borderTop: '1px solid var(--line)', borderBottom: '1px solid var(--line)' }}>
+      <section id="how" className="section-alt">
         <div className="container">
           <Reveal>
             <p className="section-kicker">How it works</p>
@@ -308,16 +331,34 @@ export default function Landing() {
             <h2 className="section-title">Ten modules, one guarantee: memory you can audit.</h2>
             <p className="section-lede">
               Every layer of StateJar maps to a module of Indian Patent 202621017626.
-              Hover a card to see its module in motion.
+              Click a card to watch its module in motion.
             </p>
           </Reveal>
           <div className="modules">
-            {MODULES.map(([num, title, body], i) => (
-              <ModuleCard key={num} num={num} title={title} body={body} delay={(i % 5) * 80} />
-            ))}
+            {MODULES.map((mod, i) => {
+              const [num, title, body] = mod
+              return (
+                <Reveal
+                  as="button"
+                  type="button"
+                  className="module"
+                  key={num}
+                  delay={(i % 5) * 80}
+                  onClick={() => setActiveModule(mod)}
+                  aria-label={`Watch the ${title} module animation`}
+                >
+                  <span className="m-num mono">{num}</span>
+                  <h3>{title}</h3>
+                  <p>{body}</p>
+                  <span className="m-watch"><span aria-hidden="true">▶</span> Watch</span>
+                </Reveal>
+              )
+            })}
           </div>
         </div>
       </section>
+
+      {activeModule && <VideoModal module={activeModule} onClose={() => setActiveModule(null)} />}
 
       <section style={{ paddingTop: 0 }}>
         <div className="container">
@@ -330,12 +371,33 @@ export default function Landing() {
       </section>
 
       <footer>
-        <div className="container">
-          <span className="footer-brand">
-            <img src="/logo.png" alt="StateJar logo" width="22" height="26" />
-            Indian Patent No. 202621017626 · Built by Yash Raj
-          </span>
-          <span className="mono" style={{ fontSize: '0.75rem' }}>statejar · deterministic state-handle memory</span>
+        <div className="container footer-grid">
+          <div className="footer-col">
+            <a className="brand" href="/">
+              <img className="brand-logo" src="/logo.png" alt="StateJar logo" />
+              State<span className="jar">Jar</span>
+            </a>
+            <p className="footer-tag">Deterministic, minimal-disclosure memory for multi-session conversational AI.</p>
+          </div>
+          <div className="footer-col">
+            <h3 className="footer-head">Product</h3>
+            <a href="/playground">Playground</a>
+            <a href="/signup">Sign up</a>
+            <a href="/login">Log in</a>
+            <a href="https://github.com/KING-OF-FLAME/StateJar" rel="noopener">GitHub repository</a>
+          </div>
+          <div className="footer-col">
+            <h3 className="footer-head">Legal & patent</h3>
+            <p>Indian Patent No. 202621017626</p>
+            <p>Yash Raj · Dr. Amol B. Kasture</p>
+            <p>MIT License</p>
+          </div>
+        </div>
+        <div className="footer-bar">
+          <div className="container">
+            <span>© 2026 StateJar · Built by Yash Raj</span>
+            <span className="mono">statejar · deterministic state-handle memory</span>
+          </div>
         </div>
       </footer>
     </>
