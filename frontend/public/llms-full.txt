@@ -1,0 +1,69 @@
+# StateJar — Full Reference
+
+> Deterministic, minimal-disclosure memory for multi-session conversational AI. No transcripts. No drift. No token burn.
+
+- Website / live demo: https://statejar.com
+- GitHub: https://github.com/KING-OF-FLAME/StateJar
+- Patent: Indian Patent No. 202621017626 (Yash Raj, Dr. Amol B. Kasture)
+- Built by Team Hello World · Hack4Humanity 2026 · AI for Societal Good
+- License: MIT
+
+**TL;DR** — StateJar turns conversations into hash-addressed structured state, so any LLM recalls exactly the facts it needs: ~78% fewer tokens, zero transcripts, fully auditable.
+
+## The Problem
+
+- **Context drift** — every new chat session forgets who you are; assistants re-ask what they already knew.
+- **Token burn** — the standard fix is replaying entire chat histories to the LLM, paying for thousands of irrelevant tokens per request.
+- **Hallucinated memory** — fuzzy vector "memories" retrieve approximately-similar text, not the actual facts, and can't prove what the model was told.
+
+## The Solution
+
+StateJar replaces transcript replay with content-addressed structured state:
+
+1. **Extract** — pull structured facts/preferences/constraints from conversation text (rule-based, GLiNER2-ready).
+2. **Canonicalize** — normalize to deterministic canonical JSON (₹2,000 ≡ 2000, key order irrelevant, dates → ISO).
+3. **Handle** — SHA-256 the canonical form → `shm_…` handle. Same meaning ⇒ byte-identical handle, every time.
+4. **Retrieve Minimum** — for each query, send the LLM only the fields it needs, with a full audit trail proving exactly what was disclosed.
+
+Memory evolves append-only: updates create new handles linked by `parent_handle`; old states are never modified, and conflicting facts are preserved as explicit conflict records instead of silently overwritten.
+
+## Architecture
+
+User message → Extractor → Canonicalizer → Handle generator (`shm_` + SHA-256) → MySQL append-only state store → Versioning + Conflicts. User query → Retriever (minimal subset) → LLM Gateway (AES-256-GCM encrypted provider keys) → OpenRouter → Audit log (deterministic replay).
+
+## The 10 Patent Modules
+
+| # | Module | What it does |
+|---|--------|--------------|
+| 1 | State Extraction | Text → structured state |
+| 2 | Canonicalization | Deterministic canonical JSON |
+| 3 | Handle Generation | Content-addressed `shm_` SHA-256 handles |
+| 4 | Deduplicated Storage | Identical meaning stored once |
+| 5 | No Full Chat Replay | Raw transcripts rejected at write time |
+| 6 | Minimal Disclosure Retrieval | Sends only the fields needed |
+| 7 | Append-Only Versioning | Updates create new handles; history immutable |
+| 8 | Conflict Preservation | Contradictions recorded, never overwritten |
+| 9 | Cross-Session Consistency | New sessions use latest state |
+| 10 | Audit + Replay | Every LLM call logged, replayable |
+
+## Benchmark
+
+On demo scenarios, minimal-disclosure retrieval sends ~48–78% fewer tokens of context than full-state replay (per-request % computed live in the Playground). A formal benchmark suite is planned for Round 2.
+
+## Tech Stack
+
+FastAPI · Python 3.12 · SQLAlchemy 2.0 · MySQL 8 · Pydantic v2 · bcrypt + JWT · AES-256-GCM (provider keys) · React 18 + Vite · OpenRouter gateway · pytest (65 tests passing)
+
+## Try It
+
+1. Sign up at https://statejar.com/signup
+2. Save an OpenRouter key in API Keys (BYOK — encrypted at rest)
+3. Open the Playground: say "My name is Ayaan, I prefer email, budget ₹2000"
+4. Start a new session and ask "Book my delivery" — watch it retrieve only the 3 fields it needs.
+
+## Roadmap (Round 2)
+
+- GLiNER2 as primary extractor (rule-based becomes fallback) for open-domain extraction
+- Benchmark suite — token savings and consistency vs. transcript-replay and vector-memory baselines
+- Multi-provider gateway — native OpenAI / Anthropic / Gemini / Ollama alongside OpenRouter
+- Audit-log UI, org/team workspaces, handle export API

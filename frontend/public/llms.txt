@@ -1,0 +1,36 @@
+# StateJar
+
+> Deterministic, minimal-disclosure memory infrastructure for multi-session conversational AI. No transcripts. No drift. No token burn. Backed by Indian Patent No. 202621017626.
+
+StateJar replaces chat-history replay and probabilistic vector recall with content-addressed structured state: conversations are extracted into structured facts, canonicalized into a deterministic JSON form, and hashed with SHA-256 into `shm_…` handles. Each LLM query receives only the minimal subset of fields it needs, with a full audit trail.
+
+## Key facts
+
+- ~78% token savings versus replaying full chat history
+- SHA-256 deterministic content-addressed handles: same meaning → byte-identical handle, every time
+- Raw transcripts are never stored or sent to the model
+- Append-only versioning: updates create new handles linked by parent_handle; history never mutates
+- Conflicting facts are preserved as explicit conflict records, never silently overwritten
+- Every LLM call is logged and deterministically replayable
+- BYOK (bring your own key) LLM gateway; provider keys encrypted at rest with AES-256-GCM
+- Stack: FastAPI (Python 3.12) backend, React 18 frontend, MySQL 8 append-only store
+
+## The 10 patent modules
+
+1. State Extraction — turns raw conversation text into structured state (facts, preferences, constraints, goals).
+2. Canonicalization — one meaning, one byte sequence: sorted keys, normalized numbers and dates, versioned schema.
+3. Handle Generation — SHA-256 over canonical state yields a deterministic `shm_` content address.
+4. Deduplicated Storage — identical meaning is stored exactly once.
+5. No Full Chat Replay — raw transcripts are rejected at write time; only structured state is kept.
+6. Minimal Disclosure Retrieval — each query discloses only the fields it needs (e.g. 2 of 14).
+7. Append-Only Versioning — updates create new handles; history is immutable.
+8. Conflict Preservation — contradictions are recorded, never overwritten.
+9. Cross-Session Consistency — the same memory across sessions, providers, and models.
+10. Audit + Replay — reconstruct exactly what any response saw.
+
+## Links
+
+- Website: https://statejar.com
+- Playground: https://statejar.com/playground
+- GitHub: https://github.com/KING-OF-FLAME/StateJar
+- Full details: https://statejar.com/llms-full.txt
