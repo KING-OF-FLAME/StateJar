@@ -6,7 +6,7 @@
 - GitHub: https://github.com/KING-OF-FLAME/StateJar
 - Patent: Indian Patent No. 202621017626 (Yash Raj, Dr. Amol B. Kasture)
 - Built by Team Hello World · Hack4Humanity 2026 · AI for Societal Good
-- License: MIT
+- License: Proprietary · All Rights Reserved · Indian Patent 202621017626 (shared for Hack4Humanity 2026 evaluation)
 
 **TL;DR** — StateJar turns conversations into hash-addressed structured state, so any LLM recalls exactly the facts it needs: ~78% fewer tokens, zero transcripts, fully auditable.
 

@@ -236,7 +236,7 @@ On the demo scenarios, minimal-disclosure retrieval sends **~48–78% fewer toke
 
 ## 📄 License
 
-MIT — see [LICENSE](LICENSE).
+Proprietary · All Rights Reserved · Indian Patent 202621017626. Shared for Hack4Humanity 2026 evaluation. See [LICENSE](LICENSE).
 
 <br>
 

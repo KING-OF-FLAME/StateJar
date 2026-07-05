@@ -390,7 +390,7 @@ export default function Landing() {
             <h3 className="footer-head">Legal & patent</h3>
             <p>Indian Patent No. 202621017626</p>
             <p>Yash Raj · Dr. Amol B. Kasture</p>
-            <p>MIT License</p>
+            <p>© 2026 StateJar · All Rights Reserved · Indian Patent 202621017626</p>
           </div>
         </div>
         <div className="footer-bar">
