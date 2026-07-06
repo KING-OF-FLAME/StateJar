@@ -233,8 +233,10 @@ export default function Landing() {
             <a className="btn btn-ghost btn-nav" href="/playground">Open the Playground</a>
           </div>
         </div>
+      </nav>
 
-        <div className={`nav-overlay${menuOpen ? ' open' : ''}`} onClick={closeMenu} aria-hidden="true" />
+      {/* Outside <nav>: its backdrop-filter creates a containing block that would trap position:fixed children. */}
+      <div className={`nav-overlay${menuOpen ? ' open' : ''}`} onClick={closeMenu} aria-hidden="true" />
         <aside className={`nav-panel${menuOpen ? ' open' : ''}`} aria-label="Menu" aria-hidden={!menuOpen}>
           <div className="nav-panel-head">
             <a className="brand" href="/" onClick={closeMenu}>
@@ -257,7 +259,6 @@ export default function Landing() {
           </div>
           <p className="nav-panel-foot mono">Indian Patent 202621017626</p>
         </aside>
-      </nav>
 
       <header className="hero">
         <div className="container">

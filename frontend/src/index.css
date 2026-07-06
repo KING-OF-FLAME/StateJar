@@ -65,8 +65,8 @@ h1, h2, h3 { font-family: var(--serif); font-weight: 500; line-height: 1.15; let
 
 /* ---------- mobile slide-in menu ---------- */
 .nav-overlay {
-  position: fixed; inset: 0; z-index: 30;
-  background: rgba(26, 26, 46, 0.4);
+  position: fixed; inset: 0; z-index: 998;
+  background: rgba(26, 26, 46, 0.45);
   backdrop-filter: blur(4px);
   -webkit-backdrop-filter: blur(4px);
   opacity: 0; visibility: hidden;
@@ -77,10 +77,10 @@ h1, h2, h3 { font-family: var(--serif); font-weight: 500; line-height: 1.15; let
   transition: opacity 0.25s ease-out;
 }
 .nav-panel {
-  position: fixed; top: 0; right: 0; bottom: 0; z-index: 31;
-  width: 80%; max-width: 360px;
-  background: var(--bg); border-left: 1px solid var(--line);
-  box-shadow: -24px 0 60px -20px rgba(26, 26, 46, 0.45);
+  position: fixed; top: 0; right: 0; height: 100dvh; z-index: 999;
+  width: min(80vw, 360px);
+  background: #FAF8F5; border-left: 1px solid var(--line);
+  box-shadow: -8px 0 30px rgba(26, 26, 46, 0.15);
   display: flex; flex-direction: column;
   padding: 0 20px 22px;
   transform: translateX(100%); opacity: 0; visibility: hidden;
