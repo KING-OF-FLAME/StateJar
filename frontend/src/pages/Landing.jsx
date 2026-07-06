@@ -62,6 +62,12 @@ const MODULES = [
   ['M10', 'Audit & Replay', 'Reconstruct exactly what any response saw.'],
 ]
 
+const NAV_LINKS = [
+  ['#problem', 'Why StateJar'],
+  ['#how', 'How it works'],
+  ['#modules', 'Patent modules'],
+]
+
 const STATS = [
   { value: 78, suffix: '%', label: 'tokens saved', count: true },
   { value: 10, suffix: '', label: 'patent modules', count: true },
@@ -185,17 +191,20 @@ export default function Landing() {
     return () => window.removeEventListener('scroll', onScroll)
   }, [])
 
-  // Lock body scroll and close on any tap outside the nav while the menu is open.
+  // Lock body scroll; close on Esc or any tap outside the panel while the menu is open.
   useEffect(() => {
     if (!menuOpen) return
     document.body.style.overflow = 'hidden'
     const onPointerDown = (e) => {
-      if (!e.target.closest('.nav')) setMenuOpen(false)
+      if (!e.target.closest('.nav-panel') && !e.target.closest('.nav-burger')) setMenuOpen(false)
     }
+    const onKey = (e) => e.key === 'Escape' && setMenuOpen(false)
     document.addEventListener('pointerdown', onPointerDown)
+    document.addEventListener('keydown', onKey)
     return () => {
       document.body.style.overflow = ''
       document.removeEventListener('pointerdown', onPointerDown)
+      document.removeEventListener('keydown', onKey)
     }
   }, [menuOpen])
 
@@ -217,13 +226,37 @@ export default function Landing() {
           >
             {menuOpen ? '✕' : '☰'}
           </button>
-          <div className={`nav-links${menuOpen ? ' open' : ''}`}>
-            <a href="#problem" onClick={closeMenu}>Why StateJar</a>
-            <a href="#how" onClick={closeMenu}>How it works</a>
-            <a href="#modules" onClick={closeMenu}>Patent modules</a>
-            <a className="btn btn-ghost btn-nav" href="/playground" onClick={closeMenu}>Open the Playground</a>
+          <div className="nav-links">
+            {NAV_LINKS.map(([href, label]) => (
+              <a key={href} href={href}>{label}</a>
+            ))}
+            <a className="btn btn-ghost btn-nav" href="/playground">Open the Playground</a>
           </div>
         </div>
+
+        <div className={`nav-overlay${menuOpen ? ' open' : ''}`} onClick={closeMenu} aria-hidden="true" />
+        <aside className={`nav-panel${menuOpen ? ' open' : ''}`} aria-label="Menu" aria-hidden={!menuOpen}>
+          <div className="nav-panel-head">
+            <a className="brand" href="/" onClick={closeMenu}>
+              <img className="brand-logo" src="/logo.png" alt="StateJar logo" />
+              State<span className="jar">Jar</span>
+            </a>
+            <button className="nav-panel-close" onClick={closeMenu} aria-label="Close menu">✕</button>
+          </div>
+          <div className="nav-panel-links">
+            {NAV_LINKS.map(([href, label], i) => (
+              <a key={href} href={href} style={{ '--i': i }} onClick={closeMenu}>
+                {label}
+                <span className="chev" aria-hidden="true">→</span>
+              </a>
+            ))}
+          </div>
+          <div className="nav-panel-ctas">
+            <a className="btn btn-ghost" href="/login" onClick={closeMenu}>Log in</a>
+            <a className="btn btn-primary" href="/playground" onClick={closeMenu}>Open the Playground</a>
+          </div>
+          <p className="nav-panel-foot mono">Indian Patent 202621017626</p>
+        </aside>
       </nav>
 
       <header className="hero">
