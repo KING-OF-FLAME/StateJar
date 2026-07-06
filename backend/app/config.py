@@ -17,6 +17,8 @@ class Settings(BaseSettings):
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "https://statejar.vercel.app",
+        "https://statejar.com",
+        "https://www.statejar.com",
     ]
 
 

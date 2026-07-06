@@ -185,6 +185,20 @@ export default function Landing() {
     return () => window.removeEventListener('scroll', onScroll)
   }, [])
 
+  // Lock body scroll and close on any tap outside the nav while the menu is open.
+  useEffect(() => {
+    if (!menuOpen) return
+    document.body.style.overflow = 'hidden'
+    const onPointerDown = (e) => {
+      if (!e.target.closest('.nav')) setMenuOpen(false)
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    return () => {
+      document.body.style.overflow = ''
+      document.removeEventListener('pointerdown', onPointerDown)
+    }
+  }, [menuOpen])
+
   const closeMenu = () => setMenuOpen(false)
 
   return (
@@ -388,14 +402,12 @@ export default function Landing() {
           </div>
           <div className="footer-col">
             <h3 className="footer-head">Legal & patent</h3>
-            <p>Indian Patent No. 202621017626</p>
-            <p>© 2026 StateJar · All Rights Reserved · Indian Patent 202621017626</p>
+            <p>Indian Patent APP No. 202621017626</p>
           </div>
         </div>
         <div className="footer-bar">
           <div className="container">
-            <span>© 2026 StateJar · Built by Yash Raj</span>
-            <span className="mono">statejar · deterministic state-handle memory</span>
+            <span>© 2026 StateJar · All Rights Reserved · Built by Team Hello World</span>
           </div>
         </div>
       </footer>

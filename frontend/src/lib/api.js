@@ -17,16 +17,27 @@ export function isAuthed() {
 
 // Production: set VITE_API_URL to the backend origin (e.g. https://statejar-api.up.railway.app).
 // Dev: leave unset — the Vite proxy forwards /api to localhost:8000.
-const API_BASE = import.meta.env.VITE_API_URL || ''
+// Strip any trailing slash so we never trigger a redirect (Safari drops CORS on redirects).
+const API_BASE = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '')
 
 export async function api(path, { method = 'GET', body } = {}) {
   const headers = { 'Content-Type': 'application/json' }
   if (_token) headers.Authorization = `Bearer ${_token}`
-  const resp = await fetch(`${API_BASE}/api/v1${path}`, {
-    method,
-    headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  })
+  let resp
+  try {
+    resp = await fetch(`${API_BASE}/api/v1${path}`, {
+      method,
+      headers,
+      mode: 'cors',
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    })
+  } catch (err) {
+    // Safari reports network/CORS failures as an opaque "Load failed" TypeError.
+    throw new Error(
+      `Could not reach the StateJar API (${err.message}). ` +
+        'Check your connection and try again.',
+    )
+  }
   if (resp.status === 401 && !path.startsWith('/auth/')) {
     setToken(null)
     window.location.href = '/login'

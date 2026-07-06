@@ -57,7 +57,7 @@ h1, h2, h3 { font-family: var(--serif); font-weight: 500; line-height: 1.15; let
 }
 .brand { font-family: var(--serif); font-size: 1.35rem; font-weight: 600; color: var(--ink); text-decoration: none; display: inline-flex; align-items: center; gap: 9px; }
 .brand .jar { color: var(--accent); }
-.brand-logo { height: 28px; width: auto; display: block; }
+.brand-logo { height: 27px; width: auto; display: block; align-self: center; }
 .nav-links { display: flex; gap: 28px; align-items: center; }
 .nav-links a { color: var(--ink-soft); text-decoration: none; font-size: 0.9rem; font-weight: 500; padding: 10px 0; }
 .nav-links a:hover { color: var(--ink); }
@@ -100,8 +100,9 @@ h1, h2, h3 { font-family: var(--serif); font-weight: 500; line-height: 1.15; let
   padding: 20px 26px; font-family: var(--mono); font-size: 0.85rem;
   text-align: left; box-shadow: 0 24px 60px -24px rgba(26, 26, 46, 0.5);
 }
+.hero-handle > div { overflow-wrap: anywhere; word-break: break-word; }
 .hero-handle .dim { color: #6A6A85; }
-.hero-handle .hl { color: #F0A98F; }
+.hero-handle .hl { color: #F0A98F; overflow-wrap: anywhere; word-break: break-all; }
 .hero-handle .ok { color: #9DC3B2; }
 
 .hero-media {
@@ -518,14 +519,14 @@ footer {
     display: none;
     position: absolute; top: 64px; left: -24px; right: -24px;
     flex-direction: column; align-items: stretch; gap: 0;
-    background: var(--bg); border-bottom: 1px solid var(--line);
-    box-shadow: 0 24px 40px -24px rgba(26, 26, 46, 0.35);
+    background: #FAF8F5; border-bottom: 1px solid var(--line);
+    box-shadow: 0 24px 48px -18px rgba(26, 26, 46, 0.4);
     padding: 8px 24px 20px;
   }
   .nav-links.open { display: flex; }
-  .nav-links a { padding: 14px 4px; min-height: 44px; display: flex; align-items: center; border-bottom: 1px solid var(--line); }
+  .nav-links a { padding: 14px 8px; min-height: 48px; display: flex; align-items: center; border-bottom: 1px solid var(--line); }
   .nav-links a:last-child { border-bottom: none; }
-  .nav-links .btn-nav { margin-top: 12px; justify-content: center; border-bottom: none; }
+  .nav-links .btn-nav { margin: 14px 8px 0; justify-content: center; border-bottom: none; text-align: center; }
   .footer-grid { grid-template-columns: 1fr; gap: 32px; padding-top: 44px; }
 }
 @media (max-width: 900px) and (min-width: 0px) {
