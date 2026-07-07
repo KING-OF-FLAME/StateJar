@@ -432,7 +432,6 @@ export default function Landing() {
             <a href="/playground">Playground</a>
             <a href="/signup">Sign up</a>
             <a href="/login">Log in</a>
-            <a href="https://github.com/KING-OF-FLAME/StateJar" rel="noopener">GitHub repository</a>
           </div>
           <div className="footer-col">
             <h3 className="footer-head">Legal & patent</h3>
