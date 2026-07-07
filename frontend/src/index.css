@@ -16,6 +16,9 @@
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
+/* Media can never force horizontal scroll on small screens. */
+img, video { max-width: 100%; }
+
 html { scroll-behavior: smooth; }
 
 body {
@@ -57,7 +60,9 @@ h1, h2, h3 { font-family: var(--serif); font-weight: 500; line-height: 1.15; let
 }
 .brand { font-family: var(--serif); font-size: 1.35rem; font-weight: 600; color: var(--ink); text-decoration: none; display: inline-flex; align-items: center; gap: 9px; }
 .brand .jar { color: var(--accent); }
-.brand-logo { height: 27px; width: auto; display: block; align-self: center; }
+/* The logo PNG has a baked-in near-white background; multiply lets the
+   header/footer background show through it without altering size or position. */
+.brand-logo { height: 27px; width: auto; display: block; align-self: center; mix-blend-mode: multiply; }
 .nav-links { display: flex; gap: 28px; align-items: center; }
 .nav-links a { color: var(--ink-soft); text-decoration: none; font-size: 0.9rem; font-weight: 500; padding: 10px 0; }
 .nav-links a:hover { color: var(--ink); }
@@ -276,9 +281,11 @@ section { padding: 96px 0; }
   margin-top: 16px; font-family: var(--mono); font-size: 0.72rem;
   background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
   padding: 10px 12px; color: var(--ink-soft);
-  overflow-wrap: anywhere;
+  overflow-wrap: anywhere; overflow-x: auto; max-width: 100%;
 }
 .flow-step .snippet .hl { color: var(--accent); }
+.flow-step .snippet .dim { color: var(--ink-faint); }
+.flow-step .snippet .hash { word-break: break-all; }
 .flow-arrow {
   position: absolute; right: -14px; top: 50%; transform: translateY(-50%);
   color: var(--ink-faint); font-size: 1rem; z-index: 2;
@@ -581,11 +588,12 @@ footer {
 /* ---------- responsive ---------- */
 @media (max-width: 1024px) {
   .modules { grid-template-columns: repeat(2, 1fr); }
+  /* Tablet: 2-up flow grid; arrows only make sense in the 4-up row. */
+  .flow { grid-template-columns: repeat(2, 1fr); }
+  .flow-arrow { display: none; }
 }
 @media (max-width: 900px) {
   .cards-3 { grid-template-columns: 1fr; }
-  .flow { grid-template-columns: repeat(2, 1fr); }
-  .flow-arrow { display: none; }
 }
 @media (max-width: 768px) {
   .nav-burger { display: flex; }
@@ -605,11 +613,16 @@ footer {
   .side-nav a, .side-logout { padding: 8px 10px; white-space: nowrap; }
   .shell-main { padding: 24px 20px; }
 }
+@media (max-width: 639px) {
+  /* Mobile: single-column flow stack with tighter cards and type. */
+  .flow { grid-template-columns: 1fr; }
+  .flow-step { padding: 22px 18px; }
+  .flow-step .snippet { font-size: 0.68rem; padding: 9px 10px; }
+}
 @media (max-width: 600px) {
   .hero { padding: 64px 0 56px; }
   .stat-grid { grid-template-columns: 1fr; }
   section { padding: 64px 0; }
-  .flow { grid-template-columns: 1fr; }
   .modules { grid-template-columns: 1fr; }
   .stats-band { grid-template-columns: repeat(2, 1fr); }
   .hero-media video { min-height: 0; }

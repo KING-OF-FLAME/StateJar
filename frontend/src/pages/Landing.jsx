@@ -24,28 +24,45 @@ const FLOW = [
     title: 'Extract',
     video: '/videos/m1.mp4',
     body: 'Raw text becomes structured state: facts, preferences, decisions, constraints, goals — and what is still unresolved.',
-    snippet: <>{'{ "preferences": { "contact_mode": '}<span className="hl">"email"</span>{' } }'}</>,
+    snippet: (
+      <>
+        {'{ "name": '}<span className="hl">"Ayaan"</span>{', "budget": '}<span className="hl">2000</span>
+        {', "preferences": { "contact_mode": "email" }, "goal": "trip_planning", "unresolved": ["dates"] }'}
+      </>
+    ),
   },
   {
     num: '02 · CANONICALIZE',
     title: 'Canonicalize',
     video: '/videos/m2.mp4',
     body: 'Sorted keys, normalized numbers and dates, versioned schema. Identical meaning → byte-identical JSON. Always.',
-    snippet: <>{'"₹2,000" ≡ "2000" → '}<span className="hl">2000</span></>,
+    snippet: (
+      <>
+        {'{ "budget": "₹2,000", "name": "Ayaan" } → '}
+        <span className="hl">{'{ "budget": 2000, "name": "Ayaan" }'}</span>{' '}
+        <span className="dim">{'// sorted keys, normalized numbers, schema v1'}</span>
+      </>
+    ),
   },
   {
     num: '03 · HANDLE',
     title: 'Handle',
     video: '/videos/m3.mp4',
     body: 'SHA-256 over the canonical state yields a deterministic content address. Same state, same handle, every time.',
-    snippet: <span className="hl">shm_8f3a9c41be07d5a2c6…d21</span>,
+    snippet: <span className="hl hash">shm_8f3a9c41be07d5a2c6f1e8b3a4d9c7e2f5a8b1c40d7e0f3a6b9c2d5e8f1a4d21</span>,
   },
   {
     num: '04 · RETRIEVE MINIMUM',
     title: 'Retrieve minimum',
     video: '/videos/m6.mp4',
     body: 'Each query discloses only the fields it needs. The model never sees your transcript — just the minimal subset, audited.',
-    snippet: <>{'subset_keys: ['}<span className="hl">2 of 14</span>{'] · −78% tokens'}</>,
+    snippet: (
+      <>
+        {'query: "What\'s his budget?" → subset_keys: ['}
+        <span className="hl">"budget", "name"</span>{'] · '}
+        <span className="hl">2 of 14</span>{' fields · −78% tokens'}
+      </>
+    ),
   },
 ]
 
