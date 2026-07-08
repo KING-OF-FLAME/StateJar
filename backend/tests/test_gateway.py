@@ -237,3 +237,105 @@ def test_live_openrouter_chat() -> None:
         "Say OK",
     )
     assert isinstance(result["content"], str) and result["content"]
+
+
+# --- /models catalog ----------------------------------------------------------
+
+from app.llm import gateway as gw  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _reset_models_cache() -> None:
+    gw._models_cache.update(at=0.0, free=None)
+
+
+_CATALOG = {
+    "data": [
+        {
+            "id": "big/free-model:free",
+            "name": "Big Free Model",
+            "context_length": 200000,
+            "pricing": {"prompt": "0", "completion": "0"},
+            "architecture": {"output_modalities": ["text"]},
+        },
+        {
+            "id": "small/free-model:free",
+            "name": "Small Free Model",
+            "context_length": 8192,
+            "pricing": {"prompt": "0", "completion": "0"},
+            "architecture": {"modality": "text->text"},
+        },
+        {
+            "id": "openai/gpt-4o",
+            "name": "GPT-4o",
+            "context_length": 128000,
+            "pricing": {"prompt": "0.0000025", "completion": "0.00001"},
+        },
+        {
+            "id": "media/free-music-model",
+            "name": "Free Music Model",
+            "context_length": 500000,
+            "pricing": {"prompt": "0", "completion": "0"},
+            "architecture": {"output_modalities": ["audio"]},
+        },
+    ]
+}
+
+
+def test_models_requires_auth(client: TestClient) -> None:
+    assert client.get("/api/v1/models").status_code == 401
+
+
+def test_models_fallback_without_key(client: TestClient) -> None:
+    headers = _auth_headers(client)
+    resp = client.get("/api/v1/models", headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["source"] == "fallback"
+    assert body["free"] == gw.FALLBACK_FREE_MODELS
+    assert body["paid"] == gw.PAID_MODELS
+
+
+@respx.mock
+def test_models_live_filters_free_and_sorts_by_context(client: TestClient) -> None:
+    respx.get(gw.OPENROUTER_MODELS_URL).mock(return_value=Response(200, json=_CATALOG))
+    headers = _auth_headers(client)
+    client.post(
+        "/api/v1/keys/provider",
+        json={"provider": "openrouter", "api_key": "sk-or-v1-testkey1234"},
+        headers=headers,
+    )
+    resp = client.get("/api/v1/models", headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["source"] == "live"
+    assert [m["id"] for m in body["free"]] == ["big/free-model:free", "small/free-model:free"]
+    assert body["paid"] == gw.PAID_MODELS
+
+
+@respx.mock
+def test_models_cached_for_an_hour(client: TestClient) -> None:
+    route = respx.get(gw.OPENROUTER_MODELS_URL).mock(return_value=Response(200, json=_CATALOG))
+    headers = _auth_headers(client)
+    client.post(
+        "/api/v1/keys/provider",
+        json={"provider": "openrouter", "api_key": "sk-or-v1-testkey1234"},
+        headers=headers,
+    )
+    client.get("/api/v1/models", headers=headers)
+    client.get("/api/v1/models", headers=headers)
+    assert route.call_count == 1
+
+
+@respx.mock
+def test_models_fetch_failure_falls_back(client: TestClient) -> None:
+    respx.get(gw.OPENROUTER_MODELS_URL).mock(return_value=Response(500))
+    headers = _auth_headers(client)
+    client.post(
+        "/api/v1/keys/provider",
+        json={"provider": "openrouter", "api_key": "sk-or-v1-testkey1234"},
+        headers=headers,
+    )
+    resp = client.get("/api/v1/models", headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["source"] == "fallback"

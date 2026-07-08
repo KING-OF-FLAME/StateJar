@@ -1,18 +1,22 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api.js'
 
-const FREE_MODELS = [
-  'meta-llama/llama-3.3-70b-instruct:free',
-  'google/gemini-2.0-flash-exp:free',
-  'mistralai/mistral-7b-instruct:free',
-]
-
-const PAID_MODELS = [
-  'openai/gpt-4o-mini',
-  'anthropic/claude-sonnet-4.6',
-  'anthropic/claude-haiku-4.5',
-  'google/gemini-2.5-flash',
-]
+/* Fallback catalog shown until GET /models answers (the backend serves the
+   live free list from OpenRouter; stale hardcoded IDs 404 with
+   "No endpoints found"). */
+const FALLBACK_CATALOG = {
+  free: [
+    { id: 'meta-llama/llama-3.3-70b-instruct:free', name: 'Llama 3.3 70B Instruct (free)' },
+    { id: 'google/gemma-3-27b-it:free', name: 'Gemma 3 27B (free)' },
+    { id: 'deepseek/deepseek-chat-v3.1:free', name: 'DeepSeek V3.1 (free)' },
+  ],
+  paid: [
+    { id: 'openai/gpt-4o-mini', name: 'GPT-4o mini' },
+    { id: 'anthropic/claude-sonnet-4.6', name: 'Claude Sonnet 4.6' },
+    { id: 'anthropic/claude-haiku-4.5', name: 'Claude Haiku 4.5' },
+    { id: 'google/gemini-2.5-flash', name: 'Gemini 2.5 Flash' },
+  ],
+}
 
 const CUSTOM_MODEL = '__custom__'
 
@@ -99,9 +103,14 @@ function StateTree({ state, changed }) {
 }
 
 /* ---------- model picker ---------- */
-function ModelPicker({ choice, customModel, onChoice, onCustomChange, disabled }) {
+function ModelPicker({ catalog, choice, customModel, onChoice, onCustomChange, disabled, openSignal }) {
   const [open, setOpen] = useState(false)
   const wrapRef = useRef(null)
+
+  // parent bumps openSignal to force the picker open (e.g. stale model error)
+  useEffect(() => {
+    if (openSignal) setOpen(true)
+  }, [openSignal])
 
   useEffect(() => {
     if (!open) return
@@ -128,31 +137,33 @@ function ModelPicker({ choice, customModel, onChoice, onCustomChange, disabled }
         <span className="mp-label mono">
           {isCustom ? (customModel.trim() || 'Custom model…') : choice}
         </span>
-        {FREE_MODELS.includes(choice) && <span className="badge-free">FREE</span>}
+        {catalog.free.some((m) => m.id === choice) && <span className="badge-free">FREE</span>}
         <span className="mp-caret" aria-hidden="true">▾</span>
       </button>
 
       {open && (
         <div className="mp-pop" role="listbox" aria-label="Model">
           <p className="mp-group">Free</p>
-          {FREE_MODELS.map((m) => (
+          {catalog.free.map((m) => (
             <button
-              type="button" key={m} role="option" aria-selected={choice === m}
-              className={`mp-item${choice === m ? ' active' : ''}`}
-              onClick={() => pick(m)}
+              type="button" key={m.id} role="option" aria-selected={choice === m.id}
+              className={`mp-item${choice === m.id ? ' active' : ''}`}
+              onClick={() => pick(m.id)}
+              title={m.name}
             >
-              <span className="mp-name mono">{m}</span>
+              <span className="mp-name mono">{m.id}</span>
               <span className="badge-free">FREE</span>
             </button>
           ))}
           <p className="mp-group">Paid <span className="mp-note">requires credits</span></p>
-          {PAID_MODELS.map((m) => (
+          {catalog.paid.map((m) => (
             <button
-              type="button" key={m} role="option" aria-selected={choice === m}
-              className={`mp-item${choice === m ? ' active' : ''}`}
-              onClick={() => pick(m)}
+              type="button" key={m.id} role="option" aria-selected={choice === m.id}
+              className={`mp-item${choice === m.id ? ' active' : ''}`}
+              onClick={() => pick(m.id)}
+              title={m.name}
             >
-              <span className="mp-name mono">{m}</span>
+              <span className="mp-name mono">{m.id}</span>
             </button>
           ))}
           <button
@@ -185,13 +196,11 @@ export default function Playground() {
   const [sessions, setSessions] = useState(() =>
     JSON.parse(localStorage.getItem('statejar_sessions') || '["session-1"]'))
   const [session, setSession] = useState(sessions[0])
-  const [modelChoice, setModelChoice] = useState(() => {
-    const saved = localStorage.getItem('statejar_model')
-    if (saved === CUSTOM_MODEL || FREE_MODELS.includes(saved) || PAID_MODELS.includes(saved)) {
-      return saved
-    }
-    return FREE_MODELS[0]
-  })
+  const [catalog, setCatalog] = useState(FALLBACK_CATALOG)
+  const [modelChoice, setModelChoice] = useState(
+    () => localStorage.getItem('statejar_model') || FALLBACK_CATALOG.free[0].id)
+  const [modelGone, setModelGone] = useState(false)   // selected model vanished from OpenRouter
+  const [pickerSignal, setPickerSignal] = useState(0) // bump to force the picker open
   const [customModel, setCustomModel] = useState(
     () => localStorage.getItem('statejar_custom_model') || '')
   const [auditScope, setAuditScope] = useState('session')
@@ -226,8 +235,26 @@ export default function Playground() {
 
   const pickModel = (value) => {
     setModelChoice(value)
+    setModelGone(false)
     localStorage.setItem('statejar_model', value)
   }
+
+  // Live model catalog: default to the first free model returned; keep the
+  // user's saved choice only if it still exists (custom is always kept).
+  useEffect(() => {
+    api('/models')
+      .then((cat) => {
+        if (!cat.free?.length) return
+        setCatalog({ free: cat.free, paid: cat.paid })
+        setModelChoice((current) => {
+          const known = [...cat.free, ...cat.paid].some((m) => m.id === current)
+          if (current === CUSTOM_MODEL || known) return current
+          localStorage.setItem('statejar_model', cat.free[0].id)
+          return cat.free[0].id
+        })
+      })
+      .catch(() => {}) // keep the fallback catalog
+  }, [])
 
   const editCustomModel = (value) => {
     setCustomModel(value)
@@ -236,7 +263,15 @@ export default function Playground() {
 
   // model string sent to the gateway; blank custom falls back to the free default
   const effectiveModel =
-    modelChoice === CUSTOM_MODEL ? (customModel.trim() || FREE_MODELS[0]) : modelChoice
+    modelChoice === CUSTOM_MODEL ? (customModel.trim() || catalog.free[0].id) : modelChoice
+
+  /* OpenRouter's 404 for a delisted/renamed model — surface a hint and reopen the picker. */
+  const flagIfModelGone = (err) => {
+    if (/no endpoints found/i.test(err.message || '')) {
+      setModelGone(true)
+      setPickerSignal((n) => n + 1)
+    }
+  }
 
   const newSession = () => {
     const tag = `session-${sessions.length + 1}`
@@ -343,6 +378,7 @@ export default function Playground() {
         const c = await chatWithRetry(payload)
         addMsg({ role: 'assistant', content: c.response })
       } catch (err) {
+        flagIfModelGone(err)
         addMsg({ role: 'assistant', error: true, content: err.message, payload })
       }
       await refreshSidePanels(session)
@@ -363,6 +399,7 @@ export default function Playground() {
         (i === idx ? { role: 'assistant', content: c.response, ts: Date.now() } : x)))
       await refreshSidePanels(session)
     } catch (err) {
+      flagIfModelGone(err)
       setMessages((m) => m.map((x, i) =>
         (i === idx ? { ...x, content: err.message, ts: Date.now() } : x)))
     } finally {
@@ -495,12 +532,19 @@ export default function Playground() {
             + New session
           </button>
           <ModelPicker
+            catalog={catalog}
             choice={modelChoice}
             customModel={customModel}
             onChoice={pickModel}
             onCustomChange={editCustomModel}
             disabled={demoRunning}
+            openSignal={pickerSignal}
           />
+          {modelGone && (
+            <span className="chip chip-warn">
+              This model is no longer available — pick another
+            </span>
+          )}
         </div>
 
         <div className="pg-messages">

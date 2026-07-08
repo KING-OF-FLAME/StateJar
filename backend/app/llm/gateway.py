@@ -13,8 +13,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import time
 from datetime import datetime, timezone
 from typing import Any
+
+import httpx
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -108,9 +111,86 @@ def chat(
     return get_provider(provider).chat(api_key, model, system_context, user_message)
 
 
+# --- model catalog ------------------------------------------------------------
+
+OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
+
+# Curated paid options shown alongside the live free list.
+PAID_MODELS = [
+    {"id": "openai/gpt-4o-mini", "name": "GPT-4o mini"},
+    {"id": "anthropic/claude-sonnet-4.6", "name": "Claude Sonnet 4.6"},
+    {"id": "anthropic/claude-haiku-4.5", "name": "Claude Haiku 4.5"},
+    {"id": "google/gemini-2.5-flash", "name": "Gemini 2.5 Flash"},
+]
+
+# Shown when OpenRouter is unreachable or the user has no key yet.
+FALLBACK_FREE_MODELS = [
+    {"id": "meta-llama/llama-3.3-70b-instruct:free", "name": "Llama 3.3 70B Instruct (free)"},
+    {"id": "google/gemma-3-27b-it:free", "name": "Gemma 3 27B (free)"},
+    {"id": "deepseek/deepseek-chat-v3.1:free", "name": "DeepSeek V3.1 (free)"},
+]
+
+_MODELS_CACHE_TTL = 3600.0  # 1 hour
+_models_cache: dict[str, Any] = {"at": 0.0, "free": None}
+
+
+def _fetch_free_models(api_key: str) -> list[dict[str, Any]]:
+    """Top free models from OpenRouter's live catalog, by context length."""
+    resp = httpx.get(
+        OPENROUTER_MODELS_URL,
+        headers={"Authorization": f"Bearer {api_key}"},
+        timeout=20.0,
+    )
+    resp.raise_for_status()
+    models = resp.json()["data"]
+
+    def _is_free_chat_model(m: dict[str, Any]) -> bool:
+        pricing = m.get("pricing", {})
+        if pricing.get("prompt") != "0" or pricing.get("completion") != "0":
+            return False
+        # only text-out chat models: zero-priced media previews (music/image,
+        # e.g. text+image->text+audio) would fail a chat completion call
+        arch = m.get("architecture", {})
+        modality = arch.get("modality") or ""
+        out = arch.get("output_modalities") or []
+        return set(out) == {"text"} if out else modality.endswith("->text")
+
+    free = [m for m in models if _is_free_chat_model(m)]
+    free.sort(key=lambda m: m.get("context_length") or 0, reverse=True)
+    return [{"id": m["id"], "name": m.get("name") or m["id"]} for m in free[:6]]
+
+
+def get_model_catalog(db: Session, user_id: int) -> dict[str, Any]:
+    """Free + paid model groups; free comes live from OpenRouter, cached 1h."""
+    now = time.time()
+    if _models_cache["free"] is not None and now - _models_cache["at"] < _MODELS_CACHE_TTL:
+        return {"free": _models_cache["free"], "paid": PAID_MODELS, "source": "live"}
+
+    api_key = _get_user_key(db, user_id, "openrouter")
+    if api_key is not None:
+        try:
+            free = _fetch_free_models(api_key)
+            if free:
+                _models_cache.update(at=now, free=free)
+                return {"free": free, "paid": PAID_MODELS, "source": "live"}
+        except Exception:  # noqa: BLE001 — any catalog failure degrades to fallback
+            pass
+    return {"free": FALLBACK_FREE_MODELS, "paid": PAID_MODELS, "source": "fallback"}
+
+
 # --- routes -------------------------------------------------------------------
 
 router = APIRouter(prefix="/keys", tags=["keys"])
+
+models_router = APIRouter(tags=["models"])
+
+
+@models_router.get("/models")
+def list_models(
+    user: UserOut = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    return get_model_catalog(db, user.id)
 
 
 class ProviderKeyIn(BaseModel):

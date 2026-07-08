@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.auth.routes import router as auth_router
 from app.config import get_settings
+from app.llm.gateway import models_router
 from app.llm.gateway import router as keys_router
 from app.memory.routes import router as memory_router
 
@@ -72,5 +73,6 @@ def health() -> dict[str, str]:
 
 api_v1.include_router(auth_router)
 api_v1.include_router(keys_router)
+api_v1.include_router(models_router)
 api_v1.include_router(memory_router)
 app.include_router(api_v1)

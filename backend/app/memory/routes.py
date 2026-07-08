@@ -135,7 +135,13 @@ def chat(
     except httpx.HTTPStatusError as exc:
         reason = f"{body.provider} returned HTTP {exc.response.status_code}"
         try:  # surface the provider's own message when it sends one
-            reason = exc.response.json()["error"]["message"]
+            err = exc.response.json()["error"]
+            reason = err["message"]
+            # OpenRouter puts the useful upstream detail (e.g. "temporarily
+            # rate-limited upstream") in metadata.raw
+            raw = (err.get("metadata") or {}).get("raw")
+            if isinstance(raw, str) and raw and raw not in reason:
+                reason = f"{reason} — {raw[:300]}"
         except Exception:  # noqa: BLE001 — any shape of error body
             pass
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Provider error: {reason}")

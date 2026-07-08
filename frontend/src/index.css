@@ -656,6 +656,11 @@ footer {
   background: var(--accent-soft); color: #B05A3C; border: 1px solid rgba(224, 120, 86, 0.25);
 }
 .chip-green { background: var(--green-soft); color: var(--green); border-color: rgba(107, 144, 128, 0.3); font-weight: 600; }
+.chip-warn {
+  font-size: 0.72rem; padding: 4px 10px; border-radius: 999px; font-weight: 600;
+  background: #FBEDE8; color: #C0442A; border: 1px solid rgba(192, 68, 42, 0.3);
+  align-self: center;
+}
 
 .timeline { position: relative; display: flex; flex-direction: column; gap: 26px; padding-left: 6px; }
 .tl-item { position: relative; padding-left: 22px; }
