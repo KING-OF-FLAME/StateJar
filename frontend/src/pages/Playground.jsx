@@ -1,13 +1,20 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api.js'
 
-const MODELS = [
+const FREE_MODELS = [
+  'meta-llama/llama-3.3-70b-instruct:free',
+  'google/gemini-2.0-flash-exp:free',
+  'mistralai/mistral-7b-instruct:free',
+]
+
+const PAID_MODELS = [
   'openai/gpt-4o-mini',
   'anthropic/claude-sonnet-4.6',
   'anthropic/claude-haiku-4.5',
   'google/gemini-2.5-flash',
-  'meta-llama/llama-3.3-70b-instruct',
 ]
+
+const CUSTOM_MODEL = '__custom__'
 
 const TABS = ['Memory State', 'Retrieved Context', 'Handles', 'Audit']
 
@@ -49,12 +56,102 @@ function StateTree({ state }) {
   )
 }
 
+/* ---------- model picker ---------- */
+function ModelPicker({ choice, customModel, onChoice, onCustomChange }) {
+  const [open, setOpen] = useState(false)
+  const wrapRef = useRef(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e) => { if (!wrapRef.current?.contains(e.target)) setOpen(false) }
+    const onKey = (e) => e.key === 'Escape' && setOpen(false)
+    document.addEventListener('pointerdown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('pointerdown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  const isCustom = choice === CUSTOM_MODEL
+  const pick = (value) => { onChoice(value); setOpen(false) }
+
+  return (
+    <div className="mp" ref={wrapRef}>
+      <button
+        type="button" className="mp-btn"
+        aria-haspopup="listbox" aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="mp-label mono">
+          {isCustom ? (customModel.trim() || 'Custom model…') : choice}
+        </span>
+        {FREE_MODELS.includes(choice) && <span className="badge-free">FREE</span>}
+        <span className="mp-caret" aria-hidden="true">▾</span>
+      </button>
+
+      {open && (
+        <div className="mp-pop" role="listbox" aria-label="Model">
+          <p className="mp-group">Free</p>
+          {FREE_MODELS.map((m) => (
+            <button
+              type="button" key={m} role="option" aria-selected={choice === m}
+              className={`mp-item${choice === m ? ' active' : ''}`}
+              onClick={() => pick(m)}
+            >
+              <span className="mp-name mono">{m}</span>
+              <span className="badge-free">FREE</span>
+            </button>
+          ))}
+          <p className="mp-group">Paid <span className="mp-note">requires credits</span></p>
+          {PAID_MODELS.map((m) => (
+            <button
+              type="button" key={m} role="option" aria-selected={choice === m}
+              className={`mp-item${choice === m ? ' active' : ''}`}
+              onClick={() => pick(m)}
+            >
+              <span className="mp-name mono">{m}</span>
+            </button>
+          ))}
+          <button
+            type="button" role="option" aria-selected={isCustom}
+            className={`mp-item mp-custom${isCustom ? ' active' : ''}`}
+            onClick={() => pick(CUSTOM_MODEL)}
+          >
+            Custom model…
+          </button>
+        </div>
+      )}
+
+      {isCustom && (
+        <input
+          className="mp-input mono"
+          value={customModel}
+          onChange={(e) => onCustomChange(e.target.value)}
+          placeholder="qwen/qwen-2.5-72b-instruct"
+          aria-label="Custom OpenRouter model ID"
+          spellCheck={false}
+        />
+      )}
+    </div>
+  )
+}
+
 /* ---------- playground ---------- */
 export default function Playground() {
   const [sessions, setSessions] = useState(() =>
     JSON.parse(localStorage.getItem('statejar_sessions') || '["session-1"]'))
   const [session, setSession] = useState(sessions[0])
-  const [model, setModel] = useState(MODELS[0])
+  const [modelChoice, setModelChoice] = useState(() => {
+    const saved = localStorage.getItem('statejar_model')
+    if (saved === CUSTOM_MODEL || FREE_MODELS.includes(saved) || PAID_MODELS.includes(saved)) {
+      return saved
+    }
+    return FREE_MODELS[0]
+  })
+  const [customModel, setCustomModel] = useState(
+    () => localStorage.getItem('statejar_custom_model') || '')
+  const [auditScope, setAuditScope] = useState('session')
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
@@ -73,6 +170,20 @@ export default function Playground() {
     localStorage.setItem('statejar_sessions', JSON.stringify(list))
   }
 
+  const pickModel = (value) => {
+    setModelChoice(value)
+    localStorage.setItem('statejar_model', value)
+  }
+
+  const editCustomModel = (value) => {
+    setCustomModel(value)
+    localStorage.setItem('statejar_custom_model', value)
+  }
+
+  // model string sent to the gateway; blank custom falls back to the free default
+  const effectiveModel =
+    modelChoice === CUSTOM_MODEL ? (customModel.trim() || FREE_MODELS[0]) : modelChoice
+
   const newSession = () => {
     const tag = `session-${sessions.length + 1}`
     persistSessions([...sessions, tag])
@@ -84,13 +195,18 @@ export default function Playground() {
     setInspected(null)
   }
 
+  const fetchAudit = async (tag, scope) => {
+    const filter = scope === 'session' ? `&session_tag=${encodeURIComponent(tag)}` : ''
+    const a = await api(`/audit?limit=20${filter}`)
+    setAudit(a.entries)
+  }
+
   const refreshSidePanels = async (tag) => {
-    const [v, a] = await Promise.all([
+    const [v] = await Promise.all([
       api(`/memory/versions?session_tag=${encodeURIComponent(tag)}`),
-      api('/audit?limit=20'),
+      fetchAudit(tag, auditScope),
     ])
     setVersions(v.versions.slice().reverse()) // newest first
-    setAudit(a.entries)
   }
 
   // load state when switching sessions
@@ -112,8 +228,12 @@ export default function Playground() {
         }
       })
       .catch(() => {})
-    api('/audit?limit=20').then((a) => setAudit(a.entries)).catch(() => {})
   }, [session])
+
+  // audit trail follows the active session and the This session / All toggle
+  useEffect(() => {
+    fetchAudit(session, auditScope).catch(() => {})
+  }, [session, auditScope])
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -147,7 +267,7 @@ export default function Playground() {
       try {
         const c = await api('/chat', {
           method: 'POST',
-          body: { session_tag: session, query: text, model },
+          body: { session_tag: session, query: text, model: effectiveModel },
         })
         reply = c.response
       } catch (err) {
@@ -177,9 +297,12 @@ export default function Playground() {
             {sessions.map((s) => <option key={s}>{s}</option>)}
           </select>
           <button className="btn btn-ghost pg-mini" onClick={newSession}>+ New session</button>
-          <select value={model} onChange={(e) => setModel(e.target.value)} className="pg-model">
-            {MODELS.map((m) => <option key={m}>{m}</option>)}
-          </select>
+          <ModelPicker
+            choice={modelChoice}
+            customModel={customModel}
+            onChoice={pickModel}
+            onCustomChange={editCustomModel}
+          />
         </div>
 
         <div className="pg-messages">
@@ -279,22 +402,45 @@ export default function Playground() {
           )}
 
           {tab === 3 && (
-            audit.length ? (
-              <div className="audit-list">
-                {audit.map((a) => (
-                  <div className="audit-row" key={a.request_id}>
-                    <div className="mono audit-id">{a.request_id.slice(0, 12)}…</div>
-                    <div className="mono audit-handle">{a.handle_used?.slice(0, 22)}…</div>
-                    <div className="pg-chips">
-                      {(a.subset_keys || []).map((k) => <span className="chip mono" key={k}>{k}</span>)}
-                    </div>
-                    <div className="audit-meta">
-                      {a.provider} · {a.model} · {new Date(a.created_at).toLocaleTimeString()}
-                    </div>
-                  </div>
-                ))}
+            <>
+              <div className="audit-scope" role="group" aria-label="Audit scope">
+                <button
+                  className={auditScope === 'session' ? 'active' : ''}
+                  onClick={() => setAuditScope('session')}
+                >
+                  This session
+                </button>
+                <button
+                  className={auditScope === 'all' ? 'active' : ''}
+                  onClick={() => setAuditScope('all')}
+                >
+                  All sessions
+                </button>
               </div>
-            ) : <p className="empty-note">No audited responses yet — chats appear here.</p>
+              {audit.length ? (
+                <div className="audit-list">
+                  {audit.map((a) => (
+                    <div className="audit-row" key={a.request_id}>
+                      <div className="mono audit-id">{a.request_id.slice(0, 12)}…</div>
+                      <div className="mono audit-handle">{a.handle_used?.slice(0, 22)}…</div>
+                      <div className="pg-chips">
+                        {(a.subset_keys || []).map((k) => <span className="chip mono" key={k}>{k}</span>)}
+                      </div>
+                      <div className="audit-meta">
+                        {auditScope === 'all' && a.session_tag ? `${a.session_tag} · ` : ''}
+                        {a.provider} · {a.model} · {new Date(a.created_at).toLocaleTimeString()}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="empty-note">
+                  {auditScope === 'session'
+                    ? 'No audited responses in this session yet — chats appear here.'
+                    : 'No audited responses yet — chats appear here.'}
+                </p>
+              )}
+            </>
           )}
         </div>
       </div>

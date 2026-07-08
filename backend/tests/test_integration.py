@@ -163,7 +163,18 @@ def test_full_pipeline_end_to_end(client: TestClient, headers: dict[str, str]) -
     assert entry["request_id"] == chat_body["audit_id"]
     assert entry["handle_used"] == h2
     assert entry["provider"] == "openrouter"
+    assert entry["session_tag"] == "session-1"
     assert set(entry["subset_keys"]) == set(chat_body["subset_keys"])
+
+    # 8. audit trail filters by session_tag
+    same = client.get(
+        "/api/v1/audit?session_tag=session-1", headers=headers
+    ).json()["entries"]
+    assert [e["request_id"] for e in same] == [entry["request_id"]]
+    other = client.get(
+        "/api/v1/audit?session_tag=session-2", headers=headers
+    ).json()["entries"]
+    assert other == []
 
 
 def test_query_without_state_is_404(client: TestClient, headers: dict[str, str]) -> None:

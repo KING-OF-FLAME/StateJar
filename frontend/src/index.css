@@ -486,6 +486,62 @@ footer {
 .pg-model { font-family: var(--mono) !important; font-size: 0.78rem !important; }
 .pg-mini { padding: 7px 14px !important; font-size: 0.82rem !important; }
 
+/* ---------- model picker ---------- */
+.mp { position: relative; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.mp-btn {
+  display: inline-flex; align-items: center; gap: 8px; max-width: min(88vw, 340px);
+  background: var(--card); border: 1px solid var(--line); border-radius: 9px;
+  padding: 8px 12px; cursor: pointer; color: var(--ink);
+}
+.mp-btn:hover { border-color: var(--accent); }
+.mp-label { font-size: 0.78rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mp-caret { color: var(--ink-faint); font-size: 0.65rem; }
+.badge-free {
+  flex-shrink: 0; font-family: var(--sans); font-size: 0.62rem; font-weight: 700;
+  letter-spacing: 0.06em; color: var(--green); background: var(--green-soft);
+  border: 1px solid rgba(107, 144, 128, 0.3); border-radius: 999px; padding: 1px 8px;
+}
+.mp-pop {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 30;
+  min-width: 290px; max-width: min(92vw, 380px); max-height: 320px; overflow-y: auto;
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: 0 18px 44px -18px rgba(26, 26, 46, 0.35); padding: 6px;
+}
+.mp-group {
+  font-family: var(--mono); font-size: 0.62rem; text-transform: uppercase;
+  letter-spacing: 0.12em; color: var(--ink-faint); padding: 8px 10px 4px;
+}
+.mp-note { text-transform: none; letter-spacing: 0; font-style: italic; }
+.mp-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  width: 100%; text-align: left; border: none; background: none; cursor: pointer;
+  font-size: 0.75rem; color: var(--ink); padding: 8px 10px; border-radius: 8px;
+}
+.mp-item:hover { background: rgba(224, 120, 86, 0.08); }
+.mp-item.active { background: var(--accent-soft); }
+.mp-name { overflow-wrap: anywhere; }
+.mp-custom {
+  font-family: var(--sans); font-weight: 600; color: var(--accent);
+  border-top: 1px solid var(--line); border-radius: 0; margin-top: 4px;
+}
+.mp-input {
+  font-size: 0.75rem; color: var(--ink); min-width: 220px;
+  background: var(--card); border: 1px solid var(--line); border-radius: 9px;
+  padding: 8px 12px; outline: none;
+}
+.mp-input:focus { border-color: var(--accent); }
+
+/* ---------- audit scope toggle ---------- */
+.audit-scope {
+  display: inline-flex; border: 1px solid var(--line); border-radius: 999px;
+  overflow: hidden; margin-bottom: 14px; background: var(--card);
+}
+.audit-scope button {
+  border: none; background: none; cursor: pointer; font-family: var(--sans);
+  font-size: 0.72rem; font-weight: 600; color: var(--ink-faint); padding: 6px 14px;
+}
+.audit-scope button.active { background: var(--accent-soft); color: #B05A3C; }
+
 .pg-messages {
   flex: 1; overflow-y: auto; background: var(--card);
   border: 1px solid var(--line); border-radius: 16px; padding: 22px;

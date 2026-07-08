@@ -56,6 +56,17 @@ def test_trail_respects_limit(logger: AuditLogger) -> None:
     assert len(logger.get_audit_trail(user_id=1, limit=3)) == 3
 
 
+def test_trail_filters_by_session_tag(logger: AuditLogger) -> None:
+    _log(logger, "req-1", session_tag="session-1")
+    _log(logger, "req-2", session_tag="session-2")
+    _log(logger, "req-3")  # legacy row, no session recorded
+    assert len(logger.get_audit_trail(user_id=1)) == 3  # no filter → everything
+    only_s1 = logger.get_audit_trail(user_id=1, session_tag="session-1")
+    assert [e["request_id"] for e in only_s1] == ["req-1"]
+    assert only_s1[0]["session_tag"] == "session-1"
+    assert logger.get_audit_trail(user_id=1, session_tag="nope") == []
+
+
 def test_replay_reconstructs_exact_subset(logger: AuditLogger) -> None:
     _log(logger, "req-1")
     result = logger.replay("req-1")

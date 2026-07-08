@@ -137,6 +137,7 @@ def chat(
         model=llm_result["model"],
         schema_version=SCHEMA_VERSION,
         norm_version=NORM_VERSION,
+        session_tag=body.session_tag,
     )
     return {
         "response": llm_result["content"],
@@ -239,10 +240,11 @@ def versions(
 @router.get("/audit")
 def audit_trail(
     limit: int = 50,
+    session_tag: str | None = None,
     user: UserOut = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    entries = _audit(db).get_audit_trail(user.id, limit=limit)
+    entries = _audit(db).get_audit_trail(user.id, limit=limit, session_tag=session_tag)
     for e in entries:
         e["created_at"] = e["created_at"].isoformat()
     return {"entries": entries}

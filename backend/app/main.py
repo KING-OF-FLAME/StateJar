@@ -28,6 +28,20 @@ def _ensure_tables() -> None:
     try:
         for md in (auth_metadata, storage_metadata, audit_metadata, llm_metadata):
             md.create_all(engine, checkfirst=True)
+
+        # create_all never alters existing tables; add columns introduced by
+        # later migrations (003: audit_logs.session_tag) for DBs created
+        # before them.
+        from sqlalchemy import inspect, text
+
+        inspector = inspect(engine)
+        if "audit_logs" in inspector.get_table_names():
+            columns = {c["name"] for c in inspector.get_columns("audit_logs")}
+            if "session_tag" not in columns:
+                with engine.begin() as conn:
+                    conn.execute(
+                        text("ALTER TABLE audit_logs ADD COLUMN session_tag VARCHAR(100) NULL")
+                    )
     except Exception:  # noqa: BLE001 — DB down at boot must not kill the app
         pass
 

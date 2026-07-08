@@ -35,6 +35,7 @@ audit_logs = Table(
     Column("request_id", String(64), nullable=False),
     Column("user_id", Integer, nullable=False),
     Column("handle_used", String(80), nullable=True),
+    Column("session_tag", String(100), nullable=True),
     Column("subset_keys", JSON, nullable=True),
     Column("provider", String(50), nullable=True),
     Column("model", String(100), nullable=True),
@@ -93,6 +94,7 @@ class AuditLogger:
         model: str | None,
         schema_version: str | None,
         norm_version: str | None,
+        session_tag: str | None = None,
     ) -> None:
         """Record which handle + state subset backed a response.
 
@@ -100,7 +102,7 @@ class AuditLogger:
         are refused outright rather than stored.
         """
         _scrub(subset_keys, "subset_keys")
-        for name, val in (("provider", provider), ("model", model)):
+        for name, val in (("provider", provider), ("model", model), ("session_tag", session_tag)):
             _scrub(val, name)
 
         with self._engine.begin() as conn:
@@ -109,6 +111,7 @@ class AuditLogger:
                     request_id=request_id,
                     user_id=user_id,
                     handle_used=handle_used,
+                    session_tag=session_tag,
                     subset_keys=subset_keys,
                     provider=provider,
                     model=model,
@@ -118,14 +121,18 @@ class AuditLogger:
                 )
             )
 
-    def get_audit_trail(self, user_id: int, limit: int = 50) -> list[dict[str, Any]]:
-        """Newest-first audit entries for a user."""
+    def get_audit_trail(
+        self, user_id: int, limit: int = 50, session_tag: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Newest-first audit entries for a user, optionally one session's only."""
         stmt = (
             select(audit_logs)
             .where(audit_logs.c.user_id == user_id)
             .order_by(audit_logs.c.created_at.desc(), audit_logs.c.id.desc())
             .limit(limit)
         )
+        if session_tag is not None:
+            stmt = stmt.where(audit_logs.c.session_tag == session_tag)
         with self._engine.connect() as conn:
             return [dict(r) for r in conn.execute(stmt).mappings()]
 
