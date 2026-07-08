@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -126,6 +127,23 @@ def chat(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
     except NotImplementedError as exc:
         raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, str(exc))
+    except httpx.TimeoutException:
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            f"Provider error: {body.provider} timed out — try again.",
+        )
+    except httpx.HTTPStatusError as exc:
+        reason = f"{body.provider} returned HTTP {exc.response.status_code}"
+        try:  # surface the provider's own message when it sends one
+            reason = exc.response.json()["error"]["message"]
+        except Exception:  # noqa: BLE001 — any shape of error body
+            pass
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Provider error: {reason}")
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            f"Provider error: could not reach {body.provider} ({exc.__class__.__name__}).",
+        )
 
     request_id = uuid.uuid4().hex
     _audit(db).log_response(

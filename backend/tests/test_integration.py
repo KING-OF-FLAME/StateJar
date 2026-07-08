@@ -196,3 +196,79 @@ def test_chat_without_provider_key_is_400(client: TestClient, headers: dict[str,
         "/api/v1/chat", json={"session_tag": "s2", "query": "Book it"}, headers=headers
     )
     assert r.status_code == 400
+    assert "API key" in r.json()["detail"]
+
+
+@respx.mock
+def test_chat_upstream_5xx_is_502(client: TestClient, headers: dict[str, str]) -> None:
+    client.post(
+        "/api/v1/memory/ingest",
+        json={"session_tag": "s3", "text": INGEST_TEXT},
+        headers=headers,
+    )
+    client.post(
+        "/api/v1/keys/provider",
+        json={"provider": "openrouter", "api_key": "sk-or-v1-testkey0000"},
+        headers=headers,
+    )
+    respx.post(OpenRouterProvider.BASE_URL).mock(
+        return_value=Response(500, json={"error": {"message": "upstream exploded"}})
+    )
+    r = client.post(
+        "/api/v1/chat", json={"session_tag": "s3", "query": "Book it"}, headers=headers
+    )
+    assert r.status_code == 502
+    assert r.json()["detail"] == "Provider error: upstream exploded"
+
+
+@respx.mock
+def test_chat_upstream_timeout_is_502(client: TestClient, headers: dict[str, str]) -> None:
+    import httpx
+
+    client.post(
+        "/api/v1/memory/ingest",
+        json={"session_tag": "s4", "text": INGEST_TEXT},
+        headers=headers,
+    )
+    client.post(
+        "/api/v1/keys/provider",
+        json={"provider": "openrouter", "api_key": "sk-or-v1-testkey0001"},
+        headers=headers,
+    )
+    respx.post(OpenRouterProvider.BASE_URL).mock(
+        side_effect=httpx.ConnectTimeout("boom")
+    )
+    r = client.post(
+        "/api/v1/chat", json={"session_tag": "s4", "query": "Book it"}, headers=headers
+    )
+    assert r.status_code == 502
+    assert r.json()["detail"].startswith("Provider error:")
+
+
+def test_demo_chat_needs_no_key_and_writes_audit(
+    client: TestClient, headers: dict[str, str]
+) -> None:
+    client.post(
+        "/api/v1/memory/ingest",
+        json={"session_tag": "demo-1", "text": INGEST_TEXT},
+        headers=headers,
+    )
+    r = client.post(
+        "/api/v1/chat",
+        json={
+            "session_tag": "demo-1",
+            "query": "Book my delivery with my usual preferences",
+            "provider": "demo",
+            "model": "scripted-demo",
+        },
+        headers=headers,
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert "delivery time" in body["response"]
+    trail = client.get(
+        "/api/v1/audit?session_tag=demo-1", headers=headers
+    ).json()["entries"]
+    assert len(trail) == 1
+    assert trail[0]["provider"] == "demo"
+    assert trail[0]["model"] == "scripted-demo"

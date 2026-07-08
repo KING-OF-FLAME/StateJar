@@ -5,7 +5,8 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      '/api': 'http://localhost:8000',
+      // scoped to /api/v1 so app routes like /api-keys aren't swallowed on hard refresh
+      '/api/v1': 'http://localhost:8000',
     },
   },
 })

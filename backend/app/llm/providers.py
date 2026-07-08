@@ -58,6 +58,41 @@ class OpenRouterProvider(LLMProvider):
         }
 
 
+class DemoProvider(LLMProvider):
+    """Scripted assistant for the playground's instant demo.
+
+    Needs no API key and makes no network calls; replies are canned per
+    demo step. The memory pipeline around it (ingest, retrieval, audit)
+    still runs for real — only this reply is scripted.
+    """
+
+    name = "demo"
+
+    _SCRIPT = [
+        ("book", "Booking with your saved preferences — I'll email you the "
+                 "confirmation and keep it under ₹2000. Only your delivery time "
+                 "is pending: when should it arrive?"),
+        ("budget is now", "Updated — your budget is now ₹2500. The earlier ₹2000 "
+                          "isn't overwritten: it's preserved in your version history, "
+                          "and this disclosure was logged in the audit trail."),
+        ("name is", "Got it, Ayaan! I've noted your email preference and ₹2000 budget."),
+    ]
+    _FALLBACK = (
+        "This is StateJar's scripted demo assistant — the memory state, handles, "
+        "and audit entries in the side panel are real."
+    )
+
+    def chat(
+        self, api_key: str, model: str, system_context: str, user_message: str
+    ) -> dict[str, Any]:
+        lowered = user_message.lower()
+        content = next(
+            (reply for trigger, reply in self._SCRIPT if trigger in lowered),
+            self._FALLBACK,
+        )
+        return {"content": content, "model": "scripted-demo", "usage": {}, "raw": {}}
+
+
 class OpenAIProvider(LLMProvider):
     name = "openai"
 
@@ -90,6 +125,7 @@ PROVIDERS: dict[str, LLMProvider] = {
     p.name: p
     for p in (
         OpenRouterProvider(),
+        DemoProvider(),
         OpenAIProvider(),
         AnthropicProvider(),
         GeminiProvider(),

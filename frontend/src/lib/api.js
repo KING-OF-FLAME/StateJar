@@ -33,10 +33,12 @@ export async function api(path, { method = 'GET', body } = {}) {
     })
   } catch (err) {
     // Safari reports network/CORS failures as an opaque "Load failed" TypeError.
-    throw new Error(
+    const netErr = new Error(
       `Could not reach the StateJar API (${err.message}). ` +
         'Check your connection and try again.',
     )
+    netErr.isNetwork = true // callers may retry once (e.g. Railway cold start)
+    throw netErr
   }
   if (resp.status === 401 && !path.startsWith('/auth/')) {
     setToken(null)

@@ -98,9 +98,13 @@ def chat(
     provider: str = "openrouter",
 ) -> dict[str, Any]:
     """Call the provider's chat API with the user's decrypted key."""
+    if provider == "demo":  # scripted playground demo: no key, no network
+        return get_provider("demo").chat("", model, system_context, user_message)
     api_key = _get_user_key(db, user_id, provider)
     if api_key is None:
-        raise LookupError(f"no {provider} key saved for user {user_id}")
+        raise LookupError(
+            f"No {provider} API key saved — add one on the API Keys page to chat."
+        )
     return get_provider(provider).chat(api_key, model, system_context, user_message)
 
 

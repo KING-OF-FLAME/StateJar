@@ -154,6 +154,31 @@ def test_placeholder_providers_raise() -> None:
             get_provider(name).chat("k", "m", "s", "u")
 
 
+def test_demo_provider_needs_no_key_and_no_network() -> None:
+    db = _TestSession()
+    try:
+        # no provider key saved for this user — demo must still answer
+        result = chat(
+            db, user_id=42, model="scripted-demo",
+            system_context="s", user_message="My name is Ayaan, budget ₹2000",
+            provider="demo",
+        )
+    finally:
+        db.close()
+    assert "Ayaan" in result["content"]
+    assert result["model"] == "scripted-demo"
+
+
+def test_demo_provider_scripted_steps() -> None:
+    demo = get_provider("demo")
+    booking = demo.chat("", "m", "s", "Book my delivery with my usual preferences")
+    assert "delivery time" in booking["content"]
+    update = demo.chat("", "m", "s", "Budget is now ₹2500")
+    assert "2500" in update["content"]
+    fallback = demo.chat("", "m", "s", "hello there")
+    assert "scripted demo" in fallback["content"]
+
+
 @respx.mock
 def test_chat_calls_openrouter_with_user_key(client: TestClient) -> None:
     headers = _auth_headers(client)
