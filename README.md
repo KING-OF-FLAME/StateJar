@@ -9,7 +9,7 @@
   <img src="https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white"/>
   <img src="https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black"/>
   <img src="https://img.shields.io/badge/MySQL-8-4479A1?logo=mysql&logoColor=white"/>
-  <img src="https://img.shields.io/badge/tests-65%20passing-6B9080"/>
+  <img src="https://img.shields.io/badge/tests-80%20passing-6B9080"/>
   <img src="https://img.shields.io/badge/Patent%20App%20No-202621017626-E07856"/>
 </p>
 
@@ -30,7 +30,7 @@
   <tr>
     <td align="center"><b>~78%</b><br><sub>tokens saved</sub></td>
     <td align="center"><b>10</b><br><sub>patent modules</sub></td>
-    <td align="center"><b>65</b><br><sub>tests passing</sub></td>
+    <td align="center"><b>80</b><br><sub>tests passing</sub></td>
     <td align="center"><b>SHA-256</b><br><sub>deterministic</sub></td>
   </tr>
 </table>
@@ -75,18 +75,22 @@ Instead of storing every word a user says, StateJar extracts only the facts that
 
 **Example**
 
-Conversation:
-> "My name is Dhruv." · "I prefer Java." · "My budget is ₹20,000."
+Conversation (Session 1):
+> "My name is Ayaan, I prefer email, budget ₹2000"
 
-Later, the user asks:
-> **"What's my budget?"**
+StateJar stores it as structured state and mints a deterministic handle:
+`shm_8f3a9c…d21` → `{ facts: {name: "Ayaan"}, preferences: {contact_mode: "email"}, constraints: {budget_inr_max: 2000} }`
 
-| Approach | What actually happens |
-|---|---|
-| Traditional | Re-reads a large chunk of history to *find* the answer |
-| StateJar | Reaches straight into the jar for **Budget = ₹40,000**  |
+Days later, in a brand-new session:
+> **"Book my delivery with my usual preferences"**
 
-No unnecessary conversation ever touches the LLM.
+| Approach | What actually happens | Cost |
+|---|---|---|
+| Full replay | Re-sends the entire chat history to find the answer | ~3,900 tokens |
+| Vector recall | Retrieves *similar-looking* text — may or may not contain the budget | unpredictable |
+| **StateJar** | Reaches into the jar for exactly 3 fields: **email · ₹2000 · delivery time (unresolved)** | **~210 tokens** |
+
+The transcript never touches the LLM — it was never even stored.
 
 ---
 
@@ -219,7 +223,7 @@ flowchart LR
 - AES-256-GCM Encryption
 - React 18 + Vite
 - OpenRouter Gateway
-- pytest (65 tests)
+- pytest (80 tests)
 
 ## Benchmark
 
@@ -253,7 +257,7 @@ copy .env.example .env        # then edit JWT_SECRET / AES_KEY
 uvicorn app.main:app --reload --port 8000
 
 # 5. Verify
-pytest                         # 65 passed
+pytest                         # 80 passed
 curl http://localhost:8000/api/v1/health
 
 # 6. Frontend (new terminal)
