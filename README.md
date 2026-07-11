@@ -2,7 +2,7 @@
 
 <h1 align="center">StateJar</h1>
 
-<p align="center"><i>Deterministic, minimal-disclosure memory for multi-session conversational AI.<br>No transcripts. No drift. No token burn.</i></p>
+<p align="center"><i>Deterministic memory for AI that never forgets — or hallucinates its past.</i></p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.12+-3776AB?logo=python&logoColor=white"/>
@@ -34,39 +34,114 @@
   </tr>
 </table>
 
-> 🎯 **TL;DR** — StateJar turns conversations into hash-addressed structured state, so any LLM recalls exactly the facts it needs: ~78% fewer tokens, zero transcripts, fully auditable.
+# 🚀 StateJar
 
-<table>
-  <tr>
-    <td align="center" width="25%"><b>1 · Extract</b><br><sub>Structured facts from conversation</sub></td>
-    <td align="center" width="25%"><b>2 · Canonicalize</b><br><sub>One deterministic JSON form</sub></td>
-    <td align="center" width="25%"><b>3 · Handle</b><br><sub>SHA-256 → <code>shm_…</code> address</sub></td>
-    <td align="center" width="25%"><b>4 · Retrieve Minimum</b><br><sub>Only the fields needed</sub></td>
-  </tr>
-</table>
+**StateJar** is a **patent-pending deterministic memory architecture** for conversational AI.
 
-<br>
+Instead of making an AI model read long conversation histories every time a user asks a question, StateJar stores only the important information in a structured format. When the AI needs to remember something, it retrieves only the required information instead of the entire conversation.
+
+This makes AI systems:
+
+* **Faster**
+* **More cost-efficient**
+* **More accurate**
+* **Able to remember across multiple sessions without replaying old chats**
 
 ---
 
-## 🧩 The Problem
+# ❌ The Problem
 
-- **Context drift** — every new chat session forgets who you are; assistants re-ask what they already knew.
-- **Token burn** — the standard fix is replaying entire chat histories to the LLM, paying for thousands of irrelevant tokens per request.
-- **Hallucinated memory** — fuzzy vector "memories" retrieve approximately-similar text, not the actual facts, and can't prove what the model was told.
+Today's conversational AI systems typically remember users by sending previous chat history back to the LLM.
 
-## 💡 The Solution
+This creates several challenges:
 
-StateJar replaces transcript replay with **content-addressed structured state**:
+* **High token usage** because large chat histories are sent repeatedly.
+* **Slower responses** since the model processes a lot of unnecessary text.
+* **Context window limitations** because LLMs can only process a limited amount of text at once.
+* **Memory drift**, where important information may be forgotten or inconsistently recalled.
+* **Poor auditability**, making it difficult to verify exactly what information the AI used.
 
-1. **Extract** — pull structured facts/preferences/constraints from conversation text (rule-based, GLiNER2-ready).
-2. **Canonicalize** — normalize to deterministic canonical JSON (₹2,000 ≡ 2000, key order irrelevant, dates → ISO).
-3. **Handle** — SHA-256 the canonical form → `shm_…` handle. *Same meaning ⇒ byte-identical handle, every time.*
-4. **Retrieve Minimum** — for each query, send the LLM **only the fields it needs**, with a full audit trail proving exactly what was disclosed.
+---
 
-Memory evolves append-only: updates create new handles linked by `parent_handle`; old states are never modified, and conflicting facts are preserved as explicit conflict records instead of silently overwritten.
+# ✅ Our Solution
 
-<br>
+StateJar replaces conversation replay with **structured memory**.
+
+Instead of storing everything the user says, StateJar keeps only the important facts in a deterministic format.
+
+When the user asks a question, it retrieves only the information required for that query.
+
+For example:
+
+**Conversation**
+
+* My name is Dhruv.
+* I prefer Java.
+* My budget is ₹20,000.
+
+**User asks**
+
+> "What's my budget?"
+
+**Traditional approach**
+
+* Reads a large portion of previous conversations to find the answer.
+
+**StateJar**
+
+* Directly retrieves:
+
+  * Budget = ₹20,000
+
+No unnecessary conversation is sent to the LLM.
+
+---
+
+# ⚙️ How StateJar Works
+
+### 1. Extract
+
+* Identify important facts from the conversation.
+* Example:
+
+  * Name
+  * Preferences
+  * Budget
+  * Constraints
+
+### 2. Canonicalize
+
+* Convert the information into one standard format.
+* Identical information always produces the same structured representation.
+
+### 3. Store
+
+* Generate a unique SHA-256 handle for the structured state.
+* This creates a secure, deterministic reference without storing the full conversation.
+
+### 4. Retrieve Minimum
+
+* When the AI receives a new query, it retrieves only the fields needed to answer it.
+* The LLM processes only relevant information instead of the entire chat history.
+
+---
+
+# 📈 Benefits
+
+* **Up to 78% fewer tokens**
+* **Lower inference cost**
+* **Faster response time**
+* **Reduced context window usage**
+* **Consistent and deterministic memory**
+* **Minimal information disclosure**
+* **Complete audit trail**
+* **Multi-session memory without replaying chat history**
+
+---
+
+# 🎯 In One Sentence
+
+**StateJar is a patent-pending memory architecture that enables conversational AI to remember important information efficiently by storing structured state and retrieving only the exact data needed, instead of rereading entire conversations.**
 
 ---
 
