@@ -2,7 +2,7 @@
 
 <h1 align="center">StateJar</h1>
 
-<p align="center"><i>Deterministic memory for AI that never forgets — or hallucinates its past.</i></p>
+<p align="center"><i>🫙 Deterministic memory for AI -> every fact sealed, indexed, and provable. Nothing replayed, nothing guessed.</i></p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.12+-3776AB?logo=python&logoColor=white"/>
@@ -10,14 +10,15 @@
   <img src="https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black"/>
   <img src="https://img.shields.io/badge/MySQL-8-4479A1?logo=mysql&logoColor=white"/>
   <img src="https://img.shields.io/badge/tests-65%20passing-6B9080"/>
-  <img src="https://img.shields.io/badge/Patent-202621017626-E07856"/>
+  <img src="https://img.shields.io/badge/Patent%20Pending-202621017626-E07856"/>
 </p>
 
 <p align="center">
-  <b><a href="https://statejar.com">Live Demo</a></b> ·
+  <b><a href="https://statejar.com">🔴 Live Demo</a></b> ·
+  <a href="#-60-second-brief-for-judges">60-Sec Brief</a> ·
   <a href="#-architecture">Architecture</a> ·
-  <a href="#-the-10-patent-modules">Modules</a> ·
-  <a href="#-local-setup">Setup</a> ·
+  <a href="#-the-10-patent-modules">10 Modules</a> ·
+  <a href="#-local-setup">Run it Locally</a> ·
   <a href="#-roadmap-round-2">Roadmap</a>
 </p>
 
@@ -34,114 +35,83 @@
   </tr>
 </table>
 
-# 🚀 StateJar
+---
 
-**StateJar** is a **patent-pending deterministic memory architecture** for conversational AI.
+## 🫙 60-Second Brief
 
-Instead of making an AI model read long conversation histories every time a user asks a question, StateJar stores only the important information in a structured format. When the AI needs to remember something, it retrieves only the required information instead of the entire conversation.
+Most AI systems "remember" you by re-reading your *entire* chat history on every message. StateJar remembers by sealing only the **facts that matter** into a tamper-evident jar, then pouring out only the **exact drops** needed to answer the question in front of it.
 
-This makes AI systems:
+| | The Old Way | StateJar |
+|---|---|---|
+| 📼 **What's stored** | The whole conversation, verbatim | Extracted facts only — name, budget, preference, etc. |
+| 🧾 **What reaches the LLM** | The entire chat history, every single time | Only the precise fields the question actually needs |
+| 🧭 **Consistency** | Drifts and forgets over long sessions | Deterministic — same fact, same answer, forever |
+| 🔍 **Auditability** | A black box — hard to prove what the AI used | Every fact carries a SHA-256 handle + full replay log |
+| 💸 **Cost per query** | Grows as the conversation grows | Stays flat, no matter how long the history is |
 
-* **Faster**
-* **More cost-efficient**
-* **More accurate**
-* **Able to remember across multiple sessions without replaying old chats**
+**See it live:** open the [Playground](https://statejar.com), type *"My name is Ayaan, I prefer email, budget ₹2000"*, start a **new session**, then ask *"Book my delivery"* — watch it pull back exactly 3 fields instead of replaying anything.
+
+**Why it's more than a demo:** this runs on a patent-pending (Indian Patent **202621017626**) 10-module pipeline — extraction → canonicalization → content-addressed sealing → minimal-disclosure retrieval → append-only versioning → full audit replay. Details below. ⬇️
 
 ---
 
-# ❌ The Problem
+## 🕳️ The Problem
 
-Today's conversational AI systems typically remember users by sending previous chat history back to the LLM.
+Today's conversational AI "remembers" users by shipping the entire prior chat back to the LLM, every single turn. That habit quietly compounds into real costs:
 
-This creates several challenges:
-
-* **High token usage** because large chat histories are sent repeatedly.
-* **Slower responses** since the model processes a lot of unnecessary text.
-* **Context window limitations** because LLMs can only process a limited amount of text at once.
-* **Memory drift**, where important information may be forgotten or inconsistently recalled.
-* **Poor auditability**, making it difficult to verify exactly what information the AI used.
+* **High token usage** — the same history gets re-sent again and again
+* **Slower responses** — the model wades through text it doesn't need
+* **Context window limits** — LLMs can only hold so much at once
+* **Memory drift** — facts get forgotten or recalled inconsistently
+* **Poor auditability** — near-impossible to prove what the AI actually used
 
 ---
 
-# ✅ Our Solution
+## 🫙 Our Solution
 
-StateJar replaces conversation replay with **structured memory**.
+StateJar swaps "replay everything" for **sealed, structured memory**.
 
-Instead of storing everything the user says, StateJar keeps only the important facts in a deterministic format.
+Instead of storing every word a user says, StateJar extracts only the facts that matter, in a deterministic form — then hands the LLM only what's needed to answer *this* question.
 
-When the user asks a question, it retrieves only the information required for that query.
+**Example**
 
-For example:
+Conversation:
+> "My name is Dhruv." · "I prefer Java." · "My budget is ₹20,000."
 
-**Conversation**
+Later, the user asks:
+> **"What's my budget?"**
 
-* My name is Dhruv.
-* I prefer Java.
-* My budget is ₹20,000.
+| Approach | What actually happens |
+|---|---|
+| Traditional | Re-reads a large chunk of history to *find* the answer |
+| StateJar | Reaches straight into the jar for **Budget = ₹40,000**  |
 
-**User asks**
-
-> "What's my budget?"
-
-**Traditional approach**
-
-* Reads a large portion of previous conversations to find the answer.
-
-**StateJar**
-
-* Directly retrieves:
-
-  * Budget = ₹20,000
-
-No unnecessary conversation is sent to the LLM.
+No unnecessary conversation ever touches the LLM.
 
 ---
 
-# ⚙️ How StateJar Works
+## ⚗️ How StateJar Works
 
-### 1. Extract
+**1. Extract** — Pull the facts that matter out of the conversation: name, preferences, budget, constraints.
 
-* Identify important facts from the conversation.
-* Example:
+**2. Canonicalize** — Fold that information into one standard shape, so identical meaning always produces an identical structure.
 
-  * Name
-  * Preferences
-  * Budget
-  * Constraints
+**3. Seal** — Generate a unique **SHA-256 handle** for the structured state — a secure, deterministic reference, without ever storing the raw transcript.
 
-### 2. Canonicalize
-
-* Convert the information into one standard format.
-* Identical information always produces the same structured representation.
-
-### 3. Store
-
-* Generate a unique SHA-256 handle for the structured state.
-* This creates a secure, deterministic reference without storing the full conversation.
-
-### 4. Retrieve Minimum
-
-* When the AI receives a new query, it retrieves only the fields needed to answer it.
-* The LLM processes only relevant information instead of the entire chat history.
+**4. Retrieve Minimum** — On a new question, pull back only the fields required to answer it. The LLM sees the relevant slice of truth — never the whole jar.
 
 ---
 
-# 📈 Benefits
+## 📈 Benefits
 
 * **Up to 78% fewer tokens**
 * **Lower inference cost**
 * **Faster response time**
-* **Reduced context window usage**
-* **Consistent and deterministic memory**
+* **Reduced context-window pressure**
+* **Consistent, deterministic memory**
 * **Minimal information disclosure**
-* **Complete audit trail**
-* **Multi-session memory without replaying chat history**
-
----
-
-# 🎯 In One Sentence
-
-**StateJar is a patent-pending memory architecture that enables conversational AI to remember important information efficiently by storing structured state and retrieving only the exact data needed, instead of rereading entire conversations.**
+* **Complete, replayable audit trail**
+* **Multi-session memory — zero chat replay**
 
 ---
 
@@ -165,7 +135,7 @@ flowchart LR
 
 ---
 
-## 📦 The 10 Patent Modules
+## 🧩 The 10 Patent Modules
 
 | # | Module | File | What it does |
 |---|--------|------|--------------|
@@ -184,9 +154,9 @@ flowchart LR
 
 ---
 
-## 🎬 Module Animations
+## 🎞️ Module Animations
 
-*(M6 — Minimal Disclosure Retrieval — is the hero animation at the top.)*
+*(M6 — Minimal Disclosure Retrieval — is the hero animation up top.)*
 
 <table>
   <tr>
@@ -219,7 +189,7 @@ flowchart LR
 
 🔗 **[statejar.com](https://statejar.com)** — deployed on Vercel + Railway
 
-### Screenshots
+### 🖼️ Screenshots
 
 <table>
   <tr>
@@ -240,10 +210,30 @@ flowchart LR
 
 ---
 
-## 🚀 Local Setup
+## 🧰 Tech Stack
+
+- FastAPI
+- SQLAlchemy 2.0
+- MySQL
+- Pydantic v2
+- bcrypt + JWT Authentication
+- AES-256-GCM Encryption
+- React 18 + Vite
+- OpenRouter Gateway
+- pytest (65 tests)
+
+## Benchmark
+
+On the demo scenarios, minimal-disclosure retrieval sends **~48–78% fewer tokens** of context than full-state replay (per-request % computed live and shown in the Playground). Formal benchmark suite lands in Round 2 — *see Roadmap*.
+
+<br>
+
+---
+
+## 🛠️ Local Setup
 
 <details>
-<summary><b>🚀 Local Setup (click to expand)</b></summary>
+<summary><b>🛠️ Local Setup (click to expand)</b></summary>
 
 Prereqs: Python 3.12+, Node 18+, XAMPP (MySQL running).
 
@@ -282,26 +272,6 @@ Sign up → save an OpenRouter key in **API Keys** → open **Playground** → s
 
 ---
 
-## 🧰 Tech Stack
-
-- FastAPI
-- SQLAlchemy 2.0
-- MySQL
-- Pydantic v2
-- bcrypt + JWT Authentication
-- AES-256-GCM Encryption
-- React 18 + Vite
-- OpenRouter Gateway
-- pytest (65 tests)
-
-## 📊 Benchmark
-
-On the demo scenarios, minimal-disclosure retrieval sends **~48–78% fewer tokens** of context than full-state replay (per-request % is computed live and shown in the Playground). Formal benchmark suite lands in Round 2 — *see Roadmap*.
-
-<br>
-
----
-
 ## 🧭 Roadmap (Round 2)
 
 - **GLiNER2 as primary extractor** (rule-based becomes fallback) for open-domain extraction
@@ -319,9 +289,9 @@ Proprietary · All Rights Reserved · Indian Patent 202621017626. Shared for Hac
 
 <p align="center"><img src="docs/assets/logo.png" width="60"/></p>
 
-<p align="center"><sub>Indian Patent No. 202621017626 </sub></p>
+<p align="center"><sub>Indian Patent No. 202621017626</sub></p>
 
-<p align="center">Built with ❤️ by <b>Team Hello World</b> — Yash Raj</p>
+<p align="center">Built with ❤️ by <b>Team Hello World</b> — Yash Raj, Dhruv Devaliya </p>
 
 <p align="center">
   <a href="https://statejar.com">Demo</a> ·
