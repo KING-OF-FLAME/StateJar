@@ -112,6 +112,7 @@ No unnecessary conversation ever touches the LLM.
 * **Minimal information disclosure**
 * **Complete, replayable audit trail**
 * **Multi-session memory — zero chat replay**
+* **Saving Billion Dollars on tokens and contect window limit**
 
 ---
 
