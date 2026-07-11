@@ -10,7 +10,7 @@
   <img src="https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black"/>
   <img src="https://img.shields.io/badge/MySQL-8-4479A1?logo=mysql&logoColor=white"/>
   <img src="https://img.shields.io/badge/tests-65%20passing-6B9080"/>
-  <img src="https://img.shields.io/badge/Patent%20Pending-202621017626-E07856"/>
+  <img src="https://img.shields.io/badge/Patent%20App%20No-202621017626-E07856"/>
 </p>
 
 <p align="center">
