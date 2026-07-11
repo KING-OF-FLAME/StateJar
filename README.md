@@ -24,7 +24,7 @@
 
 <p align="center">🏆 <b>Team Hello World</b> · Hack4Humanity 2026 · AI for Societal Good</p>
 
-<p align="center"><img src="docs/gifs/m6_retrieval.gif" width="70%"/></p>
+<p align="center"><img src="docs/gifs/problem_animation.gif" width="70%"/></p>
 
 <table align="center">
   <tr>
@@ -157,8 +157,6 @@ flowchart LR
 
 ## 🎞️ Module Animations
 
-*(M6 — Minimal Disclosure Retrieval — is the hero animation up top.)*
-
 <table>
   <tr>
     <td width="50%"><b>M1 — Structured Memory Capture</b><br><img src="docs/gifs/m1_extraction.gif" width="100%"/></td>
@@ -170,15 +168,15 @@ flowchart LR
   </tr>
   <tr>
     <td width="50%"><b>M5 — No Full Chat Replay</b><br><img src="docs/gifs/m5_no_replay.gif" width="100%"/></td>
+    <td width="50%"><b>M6 — Minimum-Sufficient Retrieval</b><br><img src="docs/gifs/m6_retrieval.gif" width="100%"/></td>
+  </tr>
+  <tr>
     <td width="50%"><b>M7 — Append-Only Versioning</b><br><img src="docs/gifs/m7_versioning.gif" width="100%"/></td>
-  </tr>
-  <tr>
     <td width="50%"><b>M8 — Conflict Preservation</b><br><img src="docs/gifs/m8_conflict.gif" width="100%"/></td>
-    <td width="50%"><b>M9 — Cross-Session Consistency</b><br><img src="docs/gifs/m9_cross_session.gif" width="100%"/></td>
   </tr>
   <tr>
+    <td width="50%"><b>M9 — Cross-Session Consistency</b><br><img src="docs/gifs/m9_cross_session.gif" width="100%"/></td>
     <td width="50%"><b>M10 — Audit Trail + Deterministic Replay</b><br><img src="docs/gifs/m10_audit.gif" width="100%"/></td>
-    <td width="50%"></td>
   </tr>
 </table>
 
