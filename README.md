@@ -294,7 +294,7 @@ Proprietary · All Rights Reserved · Indian Patent 202621017626. Shared for Hac
 
 <p align="center"><sub>Indian Patent No. 202621017626</sub></p>
 
-<p align="center">Built with ❤️ by <b>Team Hello World</b> — Yash Raj, Dhruv Devaliya, Lakshay Vig, Tarak Dhone </p>
+<p align="center">Built with ❤️ by <b>Team Hello World</b> — Yash Raj, Dhruv Devaliya, Lakshay Vig, Tarak Dhone</p>
 
 <p align="center">
   <a href="https://statejar.com">Demo</a> ·
