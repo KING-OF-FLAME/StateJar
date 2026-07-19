@@ -82,3 +82,17 @@ def test_transcript_keys_rejected(store: MemoryStore) -> None:
             state_json={"items": [{"RAW_TRANSCRIPT": "x"}]},
         )
     assert store.get_state("shm_" + "e" * 40) is None  # nothing was written
+
+
+def test_same_handle_different_user_or_session_is_stored(store: MemoryStore) -> None:
+    """Content-addressed handles collide across users running identical demos;
+    each user/session scope must still get its own row."""
+    h = "shm_" + "9" * 40
+    assert _save(store, h, user_id=1, session_tag="demo-a") is True
+    assert _save(store, h, user_id=2, session_tag="demo-b") is True   # new user
+    assert _save(store, h, user_id=1, session_tag="demo-c") is True   # new session
+    assert _save(store, h, user_id=1, session_tag="demo-a") is False  # true dup
+    assert store.get_latest_handle(2, "demo-b") == h
+    assert store.list_versions(1, "demo-c") == [h]
+    assert store.get_state(h, user_id=2)["user_id"] == 2
+    assert store.get_state(h, user_id=3) is None

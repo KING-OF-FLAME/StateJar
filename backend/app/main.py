@@ -27,14 +27,41 @@ def _ensure_tables() -> None:
     from app.memory.storage import metadata as storage_metadata
 
     try:
+        from sqlalchemy import inspect, text
+
+        # 004: memory_states dedup was global on handle, which silently
+        # dropped saves whenever a second user (or session) produced the same
+        # content-addressed handle — e.g. every fresh account running the
+        # instant demo. Rebuild the key as a surrogate id + a unique index on
+        # (handle, user_id, session_tag) before create_all sees the table.
+        inspector = inspect(engine)
+        if "memory_states" in inspector.get_table_names():
+            columns = {c["name"] for c in inspector.get_columns("memory_states")}
+            if "id" not in columns:
+                with engine.begin() as conn:
+                    if engine.dialect.name == "mysql":
+                        conn.execute(text(
+                            "ALTER TABLE memory_states DROP PRIMARY KEY, "
+                            "ADD COLUMN id INT NOT NULL AUTO_INCREMENT PRIMARY KEY FIRST, "
+                            "ADD UNIQUE KEY uq_memory_states_scope (handle, user_id, session_tag)"
+                        ))
+                    else:  # sqlite dev DBs: rebuild the table
+                        conn.execute(text("ALTER TABLE memory_states RENAME TO memory_states_old"))
+                        storage_metadata.tables["memory_states"].create(conn)
+                        conn.execute(text(
+                            "INSERT INTO memory_states (handle, parent_handle, state_json, "
+                            "schema_version, norm_version, user_id, session_tag, created_at) "
+                            "SELECT handle, parent_handle, state_json, schema_version, "
+                            "norm_version, user_id, session_tag, created_at FROM memory_states_old"
+                        ))
+                        conn.execute(text("DROP TABLE memory_states_old"))
+
         for md in (auth_metadata, storage_metadata, audit_metadata, llm_metadata):
             md.create_all(engine, checkfirst=True)
 
         # create_all never alters existing tables; add columns introduced by
         # later migrations (003: audit_logs.session_tag) for DBs created
         # before them.
-        from sqlalchemy import inspect, text
-
         inspector = inspect(engine)
         if "audit_logs" in inspector.get_table_names():
             columns = {c["name"] for c in inspector.get_columns("audit_logs")}

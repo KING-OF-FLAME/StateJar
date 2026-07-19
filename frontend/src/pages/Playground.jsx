@@ -22,12 +22,34 @@ const CUSTOM_MODEL = '__custom__'
 
 const TABS = ['Memory State', 'Retrieved Context', 'Handles', 'Audit']
 
-/* Scripted demo: user turns are fixed; assistant replies come from the
-   backend's zero-key "demo" provider, so ingest/retrieval/audit are real. */
+/* Scripted demo: user turns AND assistant replies are fixed in the client.
+   Only /memory/ingest and /memory/query are called — the real memory
+   pipeline (extraction, handles, minimal retrieval, audit) runs live, but
+   no LLM chat endpoint and no provider key are ever involved, so the demo
+   works identically on a brand-new account with zero keys saved. */
 const DEMO_MSGS = [
   'My name is Ayaan, I prefer email, budget ₹2000',
   'Book my delivery with my usual preferences',
   'Budget is now ₹2500',
+]
+
+const DEMO_REPLIES = [
+  "Got it, Ayaan! I've noted your email preference and ₹2000 budget.",
+  "Booking with your saved preferences — I'll email you the confirmation " +
+    'and keep it under ₹2000. Only your delivery time is pending: when ' +
+    'should it arrive?',
+  "Updated — your budget is now ₹2500. The earlier ₹2000 isn't " +
+    "overwritten: it's preserved in your version history, and this " +
+    'disclosure was logged in the audit trail.',
+]
+
+const DEMO_STEP_LABELS = [
+  'extracting structured state…',
+  'minting handle & logging audit…',
+  'retrieving minimal subset cross-session…',
+  'replying from memory, not transcript…',
+  'evolving state, preserving history…',
+  'writing the audit trail…',
 ]
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -209,6 +231,7 @@ export default function Playground() {
   const [busy, setBusy] = useState(false)
   const [typing, setTyping] = useState(false)       // demo typing indicator
   const [demoRunning, setDemoRunning] = useState(false)
+  const [demoStep, setDemoStep] = useState(0)       // 1-6 while the demo runs
   const [tab, setTab] = useState(0)
   const [state, setState] = useState(null)          // current memory state
   const [handle, setHandle] = useState(null)
@@ -220,6 +243,8 @@ export default function Playground() {
   const [audit, setAudit] = useState([])
   const [pulse, setPulse] = useState(0)             // animation trigger
   const chatEndRef = useRef(null)
+  const chatRef = useRef(null)                      // chat column, scrolled into view on demo start
+  const inspectorRef = useRef(null)                 // inspector column, auto-scrolled on mobile
   const stateRef = useRef(null)                     // latest state for diffing in async flows
   const keepMessagesRef = useRef(false)             // demo keeps the transcript across session switches
 
@@ -407,29 +432,47 @@ export default function Playground() {
     }
   }
 
-  /* Scripted 6-step demo: real ingest/retrieval/audit, zero-key scripted replies. */
+  /* On mobile/stacked layout, bring the inspector tab being updated into
+     view so the live panel changes are actually seen. */
+  const focusTab = (i) => {
+    setTab(i)
+    setInspected(null)
+    if (window.innerWidth <= 1000) {
+      // deferred: the inspector remounts on pulse (key change), which would
+      // cancel a scroll started against the old node
+      setTimeout(() => {
+        inspectorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      }, 350)
+    }
+  }
+
+  /* Scripted 6-step demo, fully self-contained for any account:
+     real /memory/ingest + /memory/query (audited) only — assistant replies
+     are hardcoded, so no LLM endpoint and no provider key are needed. */
   const runDemo = async () => {
     if (busy || demoRunning) return
     setDemoRunning(true)
     setInput('')
-    const stamp = Date.now().toString(36).slice(-5)
+    // unique per run so the demo always starts from an empty session
+    const stamp = Date.now().toString(36)
     const tagA = `demo-${stamp}`
     const tagB = `demo-${stamp}-next`
-    const demoChat = async (tag, query) => {
-      const c = await chatWithRetry({
-        session_tag: tag, query, model: 'scripted-demo', provider: 'demo',
+    // audited retrieval: writes a real audit_logs row (provider "demo")
+    const demoQuery = (tag, query) =>
+      api('/memory/query', {
+        method: 'POST', body: { session_tag: tag, query, audit: true },
       })
-      return c.response
-    }
     try {
+      chatRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
       // fresh sessions so the demo never touches the user's own memory
       persistSessions([...sessions, tagA, tagB])
       switchSession(tagA)
       await wait(400)
 
       // step 1 — extract: real ingest; state + handle appear live
+      setDemoStep(1)
       addMsg({ role: 'user', demo: true, content: DEMO_MSGS[0] })
-      setTab(0)
+      focusTab(0)
       setTyping(true)
       await wait(700)
       const ing1 = await api('/memory/ingest', {
@@ -438,34 +481,35 @@ export default function Playground() {
       applyIngest(ing1)
       await refreshVersions(tagA)
 
-      // step 2 — scripted acknowledgement (audited via the demo provider)
+      // step 2 — scripted acknowledgement; the disclosure is audited
+      setDemoStep(2)
       await wait(800)
-      const reply1 = await demoChat(tagA, DEMO_MSGS[0])
+      await demoQuery(tagA, DEMO_MSGS[0])
       setTyping(false)
-      addMsg({ role: 'assistant', demo: true, content: reply1 })
+      addMsg({ role: 'assistant', demo: true, content: DEMO_REPLIES[0] })
       fetchAudit(tagA, auditScope).catch(() => {})
 
       // step 3 — new session: cross-session minimal retrieval
+      setDemoStep(3)
       await wait(900)
       switchSession(tagB, { keep: true })
       await wait(400)
       addMsg({ role: 'user', demo: true, content: DEMO_MSGS[1] })
       setTyping(true)
       await wait(700)
-      const q = await api('/memory/query', {
-        method: 'POST', body: { session_tag: tagB, query: DEMO_MSGS[1] },
-      })
+      const q = await demoQuery(tagB, DEMO_MSGS[1])
       setRetrieved(q)
-      setTab(1)
+      focusTab(1)
       setPulse((p) => p + 1)
 
       // step 4 — scripted booking reply
+      setDemoStep(4)
       await wait(800)
-      const reply2 = await demoChat(tagB, DEMO_MSGS[1])
       setTyping(false)
-      addMsg({ role: 'assistant', demo: true, content: reply2 })
+      addMsg({ role: 'assistant', demo: true, content: DEMO_REPLIES[1] })
 
       // step 5 — back in the first session: state evolves, old handle preserved
+      setDemoStep(5)
       await wait(900)
       switchSession(tagA, { keep: true })
       await wait(400)
@@ -477,22 +521,24 @@ export default function Playground() {
       })
       applyIngest(ing2)
       await refreshVersions(tagA)
-      setTab(2)
+      focusTab(2)
 
       // step 6 — scripted acknowledgement, then the audit trail of it all
+      setDemoStep(6)
       await wait(800)
-      const reply3 = await demoChat(tagA, DEMO_MSGS[2])
+      await demoQuery(tagA, DEMO_MSGS[2])
       setTyping(false)
-      addMsg({ role: 'assistant', demo: true, content: reply3 })
+      addMsg({ role: 'assistant', demo: true, content: DEMO_REPLIES[2] })
       await wait(700)
       await fetchAudit(tagA, auditScope).catch(() => {})
-      setTab(3)
+      focusTab(3)
       setPulse((p) => p + 1)
     } catch (err) {
       setTyping(false)
       addMsg({ role: 'assistant', error: true, content: `Demo stopped: ${err.message}` })
     } finally {
       setDemoRunning(false)
+      setDemoStep(0)
     }
   }
 
@@ -516,7 +562,7 @@ export default function Playground() {
 
   return (
     <div className="pg">
-      <div className="pg-chat">
+      <div className="pg-chat" ref={chatRef}>
         <div className="pg-toolbar">
           <button className="btn btn-primary pg-mini demo-btn" onClick={runDemo} disabled={locked}>
             {demoRunning ? 'Demo running…' : '▶ Run instant demo'}
@@ -546,6 +592,20 @@ export default function Playground() {
             </span>
           )}
         </div>
+
+        {demoRunning && demoStep > 0 && (
+          <div className="demo-progress" role="status" aria-live="polite">
+            <span className="demo-progress-label mono">
+              Step {demoStep} of 6 — {DEMO_STEP_LABELS[demoStep - 1]}
+            </span>
+            <div className="demo-progress-track" aria-hidden="true">
+              <div
+                className="demo-progress-fill"
+                style={{ width: `${(demoStep / 6) * 100}%` }}
+              />
+            </div>
+          </div>
+        )}
 
         <div className="pg-messages">
           {messages.length === 0 && !demoRunning && (
@@ -593,7 +653,7 @@ export default function Playground() {
         </form>
       </div>
 
-      <div className="pg-inspector" key={pulse}>
+      <div className="pg-inspector" key={pulse} ref={inspectorRef}>
         <div className="pg-tabs">
           {TABS.map((t, i) => (
             <button key={t} className={i === tab ? 'active' : ''} onClick={() => { setTab(i); setInspected(null) }}>

@@ -185,13 +185,13 @@ h1, h2, h3 { font-family: var(--serif); font-weight: 500; line-height: 1.15; let
 .hero-handle .ok { color: #9DC3B2; }
 
 .hero-media {
-  margin: 56px auto 0; max-width: 720px;
+  margin: 56px auto 0; width: 100%;
   border-radius: 18px; overflow: hidden;
   border: 1px solid var(--line);
   box-shadow: 0 30px 70px -30px rgba(26, 26, 46, 0.35);
   background: var(--ink);
 }
-.hero-media video { display: block; width: 100%; height: auto; min-height: 320px; object-fit: cover; }
+.hero-media video { display: block; width: 100%; height: auto; min-height: 380px; object-fit: cover; }
 
 .trust-strip {
   margin: 28px auto 0; font-family: var(--mono); font-size: 0.75rem;
@@ -638,8 +638,31 @@ footer {
 
 .pg-handle-line { font-size: 0.74rem; color: var(--ink-faint); margin-bottom: 14px; overflow-wrap: anywhere; }
 .handle-copy { width: 26px; height: 26px; margin-left: 8px; vertical-align: middle; font-size: 0.75rem; }
-.demo-btn { white-space: nowrap; }
-.demo-cta { margin-bottom: 6px; }
+.demo-btn {
+  white-space: nowrap; font-size: 1rem; font-weight: 700;
+  padding: 12px 22px;
+  box-shadow: 0 10px 26px -12px rgba(224, 120, 86, 0.65);
+}
+.demo-cta {
+  margin-bottom: 6px; font-size: 1.05rem; font-weight: 700;
+  padding: 14px 28px;
+  box-shadow: 0 12px 30px -12px rgba(224, 120, 86, 0.65);
+}
+
+/* slim progress strip shown while the instant demo runs */
+.demo-progress { margin-bottom: 12px; }
+.demo-progress-label {
+  display: block; font-size: 0.72rem; letter-spacing: 0.04em;
+  color: var(--accent); margin-bottom: 6px;
+}
+.demo-progress-track {
+  height: 4px; border-radius: 999px; background: var(--accent-soft);
+  overflow: hidden;
+}
+.demo-progress-fill {
+  height: 100%; border-radius: 999px; background: var(--accent);
+  transition: width 0.5s ease;
+}
 .hl-accent { color: var(--accent); }
 .pg-section-label {
   font-family: var(--mono); font-size: 0.68rem; text-transform: uppercase;
@@ -745,7 +768,7 @@ footer {
   section { padding: 64px 0; }
   .modules { grid-template-columns: 1fr; }
   .stats-band { grid-template-columns: repeat(2, 1fr); }
-  .hero-media video { min-height: 0; }
+  .hero-media video { min-height: 260px; }
   .hero-handle { font-size: 0.72rem; padding: 16px 18px; }
   .lightbox { padding: 12px; }
   .lightbox-caption { padding: 16px 18px 20px; }

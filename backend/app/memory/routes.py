@@ -42,6 +42,10 @@ class IngestRequest(BaseModel):
 class QueryRequest(BaseModel):
     session_tag: str = Field(min_length=1, max_length=100)
     query: str = Field(min_length=1)
+    # Zero-key instant demo: when true, the disclosure is written to the
+    # audit trail (provider "demo") so the demo exercises the full pipeline
+    # without ever touching /chat or needing a provider key.
+    audit: bool = False
 
 
 class ChatRequest(QueryRequest):
@@ -103,10 +107,25 @@ def query(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     handle, result = _query_subset(db, user.id, body.session_tag, body.query)
+    audit_id = None
+    if body.audit:
+        audit_id = uuid.uuid4().hex
+        _audit(db).log_response(
+            request_id=audit_id,
+            user_id=user.id,
+            handle_used=handle,
+            subset_keys=result["metadata"]["subset_keys"],
+            provider="demo",
+            model="scripted-demo",
+            schema_version=SCHEMA_VERSION,
+            norm_version=NORM_VERSION,
+            session_tag=body.session_tag,
+        )
     return {
         "handle_used": handle,
         "subset": result["subset"],
         "metadata": result["metadata"],
+        "audit_id": audit_id,
     }
 
 
@@ -240,8 +259,8 @@ def state_by_handle(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Inspect any state in the user's version chain by its handle."""
-    row = _store(db).get_state(handle)
-    if row is None or row["user_id"] != user.id:
+    row = _store(db).get_state(handle, user_id=user.id)
+    if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown handle")
     return {
         "handle": row["handle"],

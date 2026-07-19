@@ -2,7 +2,10 @@
 
 Backed by the `memory_states` table. Handles are deterministic content
 addresses, so duplicate saves are deduplicated with INSERT IGNORE
-(MySQL) / INSERT OR IGNORE (SQLite, used in tests).
+(MySQL) / INSERT OR IGNORE (SQLite, used in tests). Dedup is scoped to
+(handle, user_id, session_tag): two users (or two sessions) ingesting
+identical content each get their own row — a global dedup would silently
+drop the second user's save and leave them with no state at all.
 
 Patent module 5 — No Full Chat Replay: this module never stores raw
 chat transcripts. Any state_json containing a transcript-like key is
@@ -22,6 +25,7 @@ from sqlalchemy import (
     MetaData,
     String,
     Table,
+    UniqueConstraint,
     select,
 )
 from sqlalchemy.engine import Engine
@@ -33,7 +37,8 @@ metadata = MetaData()
 memory_states = Table(
     "memory_states",
     metadata,
-    Column("handle", String(80), primary_key=True),
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("handle", String(80), nullable=False),
     Column("parent_handle", String(80), nullable=True),
     Column("state_json", JSON, nullable=False),
     Column("schema_version", String(20), nullable=False),
@@ -41,6 +46,7 @@ memory_states = Table(
     Column("user_id", Integer, nullable=False),
     Column("session_tag", String(100), nullable=True),
     Column("created_at", DateTime, nullable=False),
+    UniqueConstraint("handle", "user_id", "session_tag", name="uq_memory_states_scope"),
 )
 
 
@@ -81,8 +87,8 @@ class MemoryStore:
     ) -> bool:
         """Insert a state row; return True if inserted, False if it already existed.
 
-        Deterministic handles make the primary key a natural dedup, so
-        collisions are ignored rather than raised.
+        Deterministic handles make (handle, user_id, session_tag) a natural
+        dedup, so collisions within that scope are ignored rather than raised.
         """
         _assert_no_transcript(state_json)
 
@@ -106,11 +112,18 @@ class MemoryStore:
             )
         return bool(result.rowcount)
 
-    def get_state(self, handle: str) -> dict[str, Any] | None:
-        """Return the full row for a handle as a dict, or None if missing."""
+    def get_state(self, handle: str, user_id: int | None = None) -> dict[str, Any] | None:
+        """Return the full row for a handle as a dict, or None if missing.
+
+        A handle is content-addressed, so every row sharing it has identical
+        state_json; pass user_id to require that this user owns such a row.
+        """
+        stmt = select(memory_states).where(memory_states.c.handle == handle)
+        if user_id is not None:
+            stmt = stmt.where(memory_states.c.user_id == user_id)
         with self._engine.connect() as conn:
             row = conn.execute(
-                select(memory_states).where(memory_states.c.handle == handle)
+                stmt.order_by(memory_states.c.id.desc())
             ).mappings().first()
         return dict(row) if row is not None else None
 
@@ -119,7 +132,7 @@ class MemoryStore:
         stmt = (
             select(memory_states.c.handle)
             .where(memory_states.c.user_id == user_id)
-            .order_by(memory_states.c.created_at.desc())
+            .order_by(memory_states.c.created_at.desc(), memory_states.c.id.desc())
             .limit(1)
         )
         if session_tag is not None:
@@ -132,7 +145,7 @@ class MemoryStore:
         stmt = (
             select(memory_states.c.handle)
             .where(memory_states.c.user_id == user_id)
-            .order_by(memory_states.c.created_at.asc())
+            .order_by(memory_states.c.created_at.asc(), memory_states.c.id.asc())
         )
         if session_tag is not None:
             stmt = stmt.where(memory_states.c.session_tag == session_tag)

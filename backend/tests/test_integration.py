@@ -272,3 +272,53 @@ def test_demo_chat_needs_no_key_and_writes_audit(
     assert len(trail) == 1
     assert trail[0]["provider"] == "demo"
     assert trail[0]["model"] == "scripted-demo"
+
+
+def test_audited_query_needs_no_key_and_writes_audit(
+    client: TestClient, headers: dict[str, str]
+) -> None:
+    """The instant demo's whole backend surface: ingest + audited query only."""
+    client.post(
+        "/api/v1/memory/ingest",
+        json={"session_tag": "demo-2", "text": INGEST_TEXT},
+        headers=headers,
+    )
+    r = client.post(
+        "/api/v1/memory/query",
+        json={
+            "session_tag": "demo-2",
+            "query": "Book my delivery with my usual preferences",
+            "audit": True,
+        },
+        headers=headers,
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["audit_id"]
+    assert body["metadata"]["subset_keys"]
+    trail = client.get(
+        "/api/v1/audit?session_tag=demo-2", headers=headers
+    ).json()["entries"]
+    assert len(trail) == 1
+    assert trail[0]["request_id"] == body["audit_id"]
+    assert trail[0]["provider"] == "demo"
+    assert trail[0]["subset_keys"] == body["metadata"]["subset_keys"]
+
+
+def test_plain_query_writes_no_audit(client: TestClient, headers: dict[str, str]) -> None:
+    client.post(
+        "/api/v1/memory/ingest",
+        json={"session_tag": "demo-3", "text": INGEST_TEXT},
+        headers=headers,
+    )
+    r = client.post(
+        "/api/v1/memory/query",
+        json={"session_tag": "demo-3", "query": "What's the budget?"},
+        headers=headers,
+    )
+    assert r.status_code == 200
+    assert r.json()["audit_id"] is None
+    trail = client.get(
+        "/api/v1/audit?session_tag=demo-3", headers=headers
+    ).json()["entries"]
+    assert trail == []
