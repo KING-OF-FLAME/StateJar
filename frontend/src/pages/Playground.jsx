@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api.js'
 
 /* Fallback catalog shown until GET /models answers (the backend serves the
@@ -51,6 +52,36 @@ const DEMO_STEP_LABELS = [
   'evolving state, preserving history…',
   'writing the audit trail…',
 ]
+
+/* Presenter captions: spoken-friendly step names for the stage caption bar. */
+const PRESENTER_CAPTIONS = [
+  'Extraction: raw words become structured state',
+  'Sealing: SHA-256 handle minted, disclosure audited',
+  'New session: retrieving the minimum',
+  'Answering from memory — the transcript was never stored',
+  'Budget revised: history preserved, conflict recorded',
+  'The audit trail: proof of exactly what was disclosed',
+]
+
+/* Eases a displayed number toward `value` (for the live tokens-saved card). */
+function EasedNumber({ value }) {
+  const [n, setN] = useState(0)
+  useEffect(() => {
+    let raf
+    const start = performance.now()
+    const from = n
+    const dur = 900
+    const tick = (now) => {
+      const t = Math.min((now - start) / dur, 1)
+      const eased = 1 - Math.pow(1 - t, 3)
+      setN(Math.round((from + (value - from) * eased) * 10) / 10)
+      if (t < 1) raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [value]) // eslint-disable-line react-hooks/exhaustive-deps
+  return <>{n}</>
+}
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -242,6 +273,14 @@ export default function Playground() {
   const [inspected, setInspected] = useState(null)  // old state being inspected
   const [audit, setAudit] = useState([])
   const [pulse, setPulse] = useState(0)             // animation trigger
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [presenter, setPresenter] = useState(() => searchParams.has('presenter'))
+  const [presenterSaved, setPresenterSaved] = useState(0) // live tokens-saved % for the stage card
+  const presenterRef = useRef(presenter)            // read inside async demo flow
+  const demoSavedRef = useRef([])                   // per-query saved % collected during a demo run
+  const advanceRef = useRef(null)                   // resolver for the Space-key step gate
+  const runIdRef = useRef(0)                        // bumped on restart to abort a running demo
+  const runDemoRef = useRef(null)                   // latest runDemo for the key handler
   const chatEndRef = useRef(null)
   const chatRef = useRef(null)                      // chat column, scrolled into view on demo start
   const inspectorRef = useRef(null)                 // inspector column, auto-scrolled on mobile
@@ -449,32 +488,63 @@ export default function Playground() {
   /* Scripted 6-step demo, fully self-contained for any account:
      real /memory/ingest + /memory/query (audited) only — assistant replies
      are hardcoded, so no LLM endpoint and no provider key are needed. */
-  const runDemo = async () => {
-    if (busy || demoRunning) return
+  const runDemo = async ({ restart = false } = {}) => {
+    if (busy) return
+    if (demoRunning && !restart) return
+    // bumping the run id aborts any in-flight run at its next pause
+    const myRun = ++runIdRef.current
+    advanceRef.current = null
+    demoSavedRef.current = []
+    setPresenterSaved(0)
     setDemoRunning(true)
     setInput('')
+    const DEMO_ABORTED = '__demo_restarted__'
+    /* Presenter paces with Space; otherwise the original fixed timers run.
+       Either way, a restart (new run id) aborts this run at the pause. */
+    const tick = async (ms) => {
+      await wait(ms)
+      if (runIdRef.current !== myRun) throw new Error(DEMO_ABORTED)
+    }
+    const stepPause = async (ms) => {
+      if (presenterRef.current) {
+        await new Promise((resolve) => { advanceRef.current = resolve })
+      } else {
+        await wait(ms)
+      }
+      if (runIdRef.current !== myRun) throw new Error(DEMO_ABORTED)
+    }
     // unique per run so the demo always starts from an empty session
     const stamp = Date.now().toString(36)
     const tagA = `demo-${stamp}`
     const tagB = `demo-${stamp}-next`
-    // audited retrieval: writes a real audit_logs row (provider "demo")
-    const demoQuery = (tag, query) =>
-      api('/memory/query', {
+    // audited retrieval: writes a real audit_logs row (provider "demo");
+    // its metadata feeds the presenter "tokens saved" card
+    const demoQuery = async (tag, query) => {
+      const q = await api('/memory/query', {
         method: 'POST', body: { session_tag: tag, query, audit: true },
       })
+      const pct = q?.metadata?.token_estimate_saved_pct
+      if (typeof pct === 'number') {
+        demoSavedRef.current.push(pct)
+        const avg =
+          demoSavedRef.current.reduce((a, b) => a + b, 0) / demoSavedRef.current.length
+        setPresenterSaved(Math.round(avg * 10) / 10)
+      }
+      return q
+    }
     try {
       chatRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
       // fresh sessions so the demo never touches the user's own memory
       persistSessions([...sessions, tagA, tagB])
       switchSession(tagA)
-      await wait(400)
+      await tick(400)
 
       // step 1 — extract: real ingest; state + handle appear live
       setDemoStep(1)
       addMsg({ role: 'user', demo: true, content: DEMO_MSGS[0] })
       focusTab(0)
       setTyping(true)
-      await wait(700)
+      await tick(700)
       const ing1 = await api('/memory/ingest', {
         method: 'POST', body: { session_tag: tagA, text: DEMO_MSGS[0] },
       })
@@ -482,40 +552,40 @@ export default function Playground() {
       await refreshVersions(tagA)
 
       // step 2 — scripted acknowledgement; the disclosure is audited
+      await stepPause(800)
       setDemoStep(2)
-      await wait(800)
       await demoQuery(tagA, DEMO_MSGS[0])
       setTyping(false)
       addMsg({ role: 'assistant', demo: true, content: DEMO_REPLIES[0] })
       fetchAudit(tagA, auditScope).catch(() => {})
 
       // step 3 — new session: cross-session minimal retrieval
+      await stepPause(900)
       setDemoStep(3)
-      await wait(900)
       switchSession(tagB, { keep: true })
-      await wait(400)
+      await tick(400)
       addMsg({ role: 'user', demo: true, content: DEMO_MSGS[1] })
       setTyping(true)
-      await wait(700)
+      await tick(700)
       const q = await demoQuery(tagB, DEMO_MSGS[1])
       setRetrieved(q)
       focusTab(1)
       setPulse((p) => p + 1)
 
       // step 4 — scripted booking reply
+      await stepPause(800)
       setDemoStep(4)
-      await wait(800)
       setTyping(false)
       addMsg({ role: 'assistant', demo: true, content: DEMO_REPLIES[1] })
 
       // step 5 — back in the first session: state evolves, old handle preserved
+      await stepPause(900)
       setDemoStep(5)
-      await wait(900)
       switchSession(tagA, { keep: true })
-      await wait(400)
+      await tick(400)
       addMsg({ role: 'user', demo: true, content: DEMO_MSGS[2] })
       setTyping(true)
-      await wait(700)
+      await tick(700)
       const ing2 = await api('/memory/ingest', {
         method: 'POST', body: { session_tag: tagA, text: DEMO_MSGS[2] },
       })
@@ -524,21 +594,26 @@ export default function Playground() {
       focusTab(2)
 
       // step 6 — scripted acknowledgement, then the audit trail of it all
+      await stepPause(800)
       setDemoStep(6)
-      await wait(800)
       await demoQuery(tagA, DEMO_MSGS[2])
       setTyping(false)
       addMsg({ role: 'assistant', demo: true, content: DEMO_REPLIES[2] })
-      await wait(700)
+      await tick(700)
       await fetchAudit(tagA, auditScope).catch(() => {})
       focusTab(3)
       setPulse((p) => p + 1)
     } catch (err) {
-      setTyping(false)
-      addMsg({ role: 'assistant', error: true, content: `Demo stopped: ${err.message}` })
+      if (err.message !== DEMO_ABORTED) {
+        setTyping(false)
+        addMsg({ role: 'assistant', error: true, content: `Demo stopped: ${err.message}` })
+      }
     } finally {
-      setDemoRunning(false)
-      setDemoStep(0)
+      // a restart spawns a new run; only the still-current run resets the UI
+      if (runIdRef.current === myRun) {
+        setDemoRunning(false)
+        setDemoStep(0)
+      }
     }
   }
 
@@ -558,13 +633,78 @@ export default function Playground() {
     }
   }
 
+  /* ---------- presenter mode (?presenter=true) ---------- */
+
+  // body class drives the CSS (hidden chrome, bigger type, high contrast)
+  useEffect(() => {
+    presenterRef.current = presenter
+    document.body.classList.toggle('presenter-mode', presenter)
+    return () => document.body.classList.remove('presenter-mode')
+  }, [presenter])
+
+  // Space = advance (or start), R = restart, Esc = exit presenter mode
+  useEffect(() => {
+    if (!presenter) return
+    const onKey = (e) => {
+      const t = e.target.tagName
+      if (t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT') return
+      if (e.code === 'Space') {
+        e.preventDefault()
+        if (advanceRef.current) {
+          const advance = advanceRef.current
+          advanceRef.current = null
+          advance()
+        } else {
+          runDemoRef.current?.() // idle: Space starts the demo
+        }
+      } else if (e.key === 'r' || e.key === 'R') {
+        e.preventDefault()
+        runDemoRef.current?.({ restart: true })
+      } else if (e.key === 'Escape') {
+        setPresenter(false)
+        const next = new URLSearchParams(searchParams)
+        next.delete('presenter')
+        setSearchParams(next, { replace: true })
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [presenter, searchParams, setSearchParams])
+
+  // keep the key handler pointed at the latest closure
+  useEffect(() => {
+    runDemoRef.current = runDemo
+  })
+
   const locked = busy || demoRunning
 
   return (
     <div className="pg">
+      {presenter && (
+        <div className="presenter-counter" role="status" aria-live="polite">
+          <span className="presenter-counter-label">Tokens saved this demo</span>
+          <span className="presenter-counter-num">
+            <EasedNumber value={presenterSaved} />%
+          </span>
+        </div>
+      )}
+      {presenter && (
+        <div className="presenter-caption" role="status">
+          {demoRunning && demoStep > 0 ? (
+            <span className="presenter-caption-text">
+              Step {demoStep}/6 — {PRESENTER_CAPTIONS[demoStep - 1]}
+            </span>
+          ) : (
+            <span className="presenter-caption-text">
+              Presenter mode — press Space to start the demo
+            </span>
+          )}
+          <span className="presenter-hint mono">Space next · R restart · Esc exit</span>
+        </div>
+      )}
       <div className="pg-chat" ref={chatRef}>
         <div className="pg-toolbar">
-          <button className="btn btn-primary pg-mini demo-btn" onClick={runDemo} disabled={locked}>
+          <button className="btn btn-primary pg-mini demo-btn" onClick={() => runDemo()} disabled={locked}>
             {demoRunning ? 'Demo running…' : '▶ Run instant demo'}
           </button>
           <select
@@ -610,7 +750,7 @@ export default function Playground() {
         <div className="pg-messages">
           {messages.length === 0 && !demoRunning && (
             <div className="pg-hint">
-              <button className="btn btn-primary demo-cta" onClick={runDemo} disabled={locked}>
+              <button className="btn btn-primary demo-cta" onClick={() => runDemo()} disabled={locked}>
                 ▶ Run instant demo
               </button>
               <p className="mono">// no API key needed — watch the memory pipeline run live</p>

@@ -773,3 +773,61 @@ footer {
   .lightbox { padding: 12px; }
   .lightbox-caption { padding: 16px 18px 20px; }
 }
+
+/* ---------- presenter mode (/playground?presenter=true) ---------- */
+body.presenter-mode .sidebar { display: none; }
+body.presenter-mode .shell-main {
+  max-width: none; padding: 96px 48px 32px;
+}
+/* The stage bars are fixed; reserve their height so the demo's
+   scrollIntoView can never tuck content underneath them. */
+body.presenter-mode .pg { height: calc(100vh - 128px); }
+body.presenter-mode .pg-chat,
+body.presenter-mode .pg-inspector { scroll-margin-top: 104px; }
+/* the caption bar already shows step N/6 — drop the inline duplicate */
+body.presenter-mode .demo-progress { display: none; }
+body.presenter-mode { background: #FFFDFA; }
+body.presenter-mode .pg-bubble { font-size: 19px; line-height: 1.6; padding: 16px 20px; }
+body.presenter-mode .pg-role { font-size: 0.82rem; }
+body.presenter-mode .pg-hint { font-size: 1.05rem; }
+body.presenter-mode .pg-tabs button { font-size: 0.92rem; padding: 15px 6px; }
+body.presenter-mode .json-tree { font-size: 0.95rem; }
+body.presenter-mode .pg-handle-line { font-size: 0.88rem; }
+body.presenter-mode .chip { font-size: 0.85rem; padding: 6px 13px; }
+body.presenter-mode .tl-handle { font-size: 0.85rem; }
+body.presenter-mode .audit-id, body.presenter-mode .audit-handle,
+body.presenter-mode .audit-meta { font-size: 0.85rem; }
+body.presenter-mode .empty-note { font-size: 1rem; }
+/* high contrast: darker ink on light surfaces */
+body.presenter-mode .pg-msg.assistant .pg-bubble { color: #10101F; border-color: #D8D2C8; }
+body.presenter-mode .card, body.presenter-mode .panel { border-color: #D8D2C8; }
+
+.presenter-counter {
+  position: fixed; top: 16px; right: 20px; z-index: 60;
+  background: var(--ink); color: #FAF8F5;
+  border-radius: 14px; padding: 12px 20px;
+  display: flex; flex-direction: column; gap: 2px; align-items: flex-end;
+  box-shadow: 0 16px 40px -16px rgba(26, 26, 46, 0.55);
+}
+.presenter-counter-label {
+  font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.09em;
+  color: #B8B8C8; font-weight: 600;
+}
+.presenter-counter-num {
+  font-family: var(--serif); font-size: 2.1rem; font-weight: 600;
+  color: #F0A98F; line-height: 1.1; font-variant-numeric: tabular-nums;
+}
+
+.presenter-caption {
+  position: fixed; top: 16px; left: 20px; right: 240px; z-index: 60;
+  background: rgba(26, 26, 46, 0.92); color: #FAF8F5;
+  border-radius: 12px; padding: 12px 20px;
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  box-shadow: 0 16px 40px -16px rgba(26, 26, 46, 0.55);
+}
+.presenter-caption-text { font-size: 1.05rem; font-weight: 600; }
+.presenter-hint { font-size: 0.72rem; color: #9A9AB0; white-space: nowrap; }
+@media (max-width: 800px) {
+  .presenter-caption { right: 20px; top: 84px; }
+  .presenter-hint { display: none; }
+}
