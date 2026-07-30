@@ -83,7 +83,9 @@ function EasedNumber({ value }) {
   return <>{n}</>
 }
 
-const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+/* Hard ceiling on any single demo step's network work: past this the beat
+   degrades to its scripted reply rather than sitting on a spinner. */
+const DEMO_STEP_TIMEOUT_MS = 6000
 
 const fmtTime = (ts) =>
   new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -156,7 +158,9 @@ function StateTree({ state, changed }) {
 }
 
 /* ---------- model picker ---------- */
-function ModelPicker({ catalog, choice, customModel, onChoice, onCustomChange, disabled, openSignal }) {
+function ModelPicker({
+  catalog, choice, customModel, onChoice, onCustomChange, disabled, disabledHint, openSignal,
+}) {
   const [open, setOpen] = useState(false)
   const wrapRef = useRef(null)
 
@@ -181,9 +185,10 @@ function ModelPicker({ catalog, choice, customModel, onChoice, onCustomChange, d
   const pick = (value) => { onChoice(value); setOpen(false) }
 
   return (
-    <div className="mp" ref={wrapRef}>
+    <div className={`mp${disabled ? ' mp-disabled' : ''}`} ref={wrapRef} title={disabled ? disabledHint : undefined}>
       <button
         type="button" className="mp-btn" disabled={disabled}
+        title={disabled ? disabledHint : undefined}
         aria-haspopup="listbox" aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
       >
@@ -275,17 +280,21 @@ export default function Playground() {
   const [pulse, setPulse] = useState(0)             // animation trigger
   const [searchParams, setSearchParams] = useSearchParams()
   const [presenter, setPresenter] = useState(() => searchParams.has('presenter'))
-  const [presenterSaved, setPresenterSaved] = useState(0) // live tokens-saved % for the stage card
+  const [presenterSaved, setPresenterSaved] = useState(null) // real % from /memory/query; null = hide card
   const presenterRef = useRef(presenter)            // read inside async demo flow
   const demoSavedRef = useRef([])                   // per-query saved % collected during a demo run
-  const advanceRef = useRef(null)                   // resolver for the Space-key step gate
-  const runIdRef = useRef(0)                        // bumped on restart to abort a running demo
-  const runDemoRef = useRef(null)                   // latest runDemo for the key handler
+  const demoCtxRef = useRef(null)                   // { runId, tagA, tagB, idx, busy } while running
+  const autoTimerRef = useRef(null)                 // non-presenter auto-advance timer
+  const runIdRef = useRef(0)                        // bumped on restart to invalidate the old run
+  const demoCtlRef = useRef({})                     // latest start/advance for the key handler
   const chatEndRef = useRef(null)
   const chatRef = useRef(null)                      // chat column, scrolled into view on demo start
   const inspectorRef = useRef(null)                 // inspector column, auto-scrolled on mobile
   const stateRef = useRef(null)                     // latest state for diffing in async flows
-  const keepMessagesRef = useRef(false)             // demo keeps the transcript across session switches
+  // Session tag whose transcript survives the next switch. Stored as the tag
+  // (not a boolean) so the [session] effect stays idempotent — a consumed
+  // flag would let StrictMode's second effect pass wipe the first message.
+  const keepForRef = useRef(null)
 
   const persistSessions = (list) => {
     setSessions(list)
@@ -293,7 +302,7 @@ export default function Playground() {
   }
 
   const switchSession = (tag, { keep = false } = {}) => {
-    keepMessagesRef.current = keep
+    keepForRef.current = keep ? tag : null
     setSession(tag)
   }
 
@@ -372,11 +381,10 @@ export default function Playground() {
   useEffect(() => {
     setInspected(null)
     setChanged(null)
-    if (!keepMessagesRef.current) {
+    if (keepForRef.current !== session) {
       setMessages([])
       setRetrieved(null)
     }
-    keepMessagesRef.current = false
     api(`/memory/versions?session_tag=${encodeURIComponent(session)}`)
       .then(async (v) => {
         setVersions(v.versions.slice().reverse())
@@ -485,137 +493,204 @@ export default function Playground() {
     }
   }
 
-  /* Scripted 6-step demo, fully self-contained for any account:
-     real /memory/ingest + /memory/query (audited) only — assistant replies
-     are hardcoded, so no LLM endpoint and no provider key are needed. */
-  const runDemo = async ({ restart = false } = {}) => {
-    if (busy) return
-    if (demoRunning && !restart) return
-    // bumping the run id aborts any in-flight run at its next pause
-    const myRun = ++runIdRef.current
-    advanceRef.current = null
-    demoSavedRef.current = []
-    setPresenterSaved(0)
-    setDemoRunning(true)
-    setInput('')
-    const DEMO_ABORTED = '__demo_restarted__'
-    /* Presenter paces with Space; otherwise the original fixed timers run.
-       Either way, a restart (new run id) aborts this run at the pause. */
-    const tick = async (ms) => {
-      await wait(ms)
-      if (runIdRef.current !== myRun) throw new Error(DEMO_ABORTED)
+  /* ---------- demo step machine ----------
+     Six scripted beats, fully self-contained for any account: only
+     /memory/ingest and /memory/query (audited) are ever called, and every
+     assistant reply is a local constant — no /chat call, no provider key,
+     no dependency on the selected model.
+
+     Each beat is { caption, before, work, reply }. The runner guarantees,
+     via try/catch/finally + a hard timeout, that the typing indicator is
+     always cleared and the scripted reply is always rendered — so a slow
+     or failed backend degrades the demo instead of freezing it. */
+
+  const demoSteps = [
+    {
+      before: (c) => { addMsg({ role: 'user', demo: true, content: DEMO_MSGS[0] }); focusTab(0) },
+      work: async (c) => {
+        const ing = await api('/memory/ingest', {
+          method: 'POST', body: { session_tag: c.tagA, text: DEMO_MSGS[0] },
+        })
+        applyIngest(ing)
+        await refreshVersions(c.tagA)
+      },
+    },
+    {
+      work: async (c) => {
+        await demoQuery(c.tagA, DEMO_MSGS[0])
+        await fetchAudit(c.tagA, auditScope)
+      },
+      reply: DEMO_REPLIES[0],
+    },
+    {
+      before: (c) => {
+        switchSession(c.tagB, { keep: true })
+        addMsg({ role: 'user', demo: true, content: DEMO_MSGS[1] })
+      },
+      work: async (c) => {
+        const q = await demoQuery(c.tagB, DEMO_MSGS[1])
+        setRetrieved(q)
+        focusTab(1)
+        setPulse((p) => p + 1)
+      },
+    },
+    { reply: DEMO_REPLIES[1] },
+    {
+      before: (c) => {
+        switchSession(c.tagA, { keep: true })
+        addMsg({ role: 'user', demo: true, content: DEMO_MSGS[2] })
+      },
+      work: async (c) => {
+        const ing = await api('/memory/ingest', {
+          method: 'POST', body: { session_tag: c.tagA, text: DEMO_MSGS[2] },
+        })
+        applyIngest(ing)
+        await refreshVersions(c.tagA)
+        focusTab(2)
+      },
+    },
+    {
+      work: async (c) => {
+        await demoQuery(c.tagA, DEMO_MSGS[2])
+        await fetchAudit(c.tagA, auditScope)
+        focusTab(3)
+        setPulse((p) => p + 1)
+      },
+      reply: DEMO_REPLIES[2],
+    },
+  ]
+
+  /* Audited retrieval — its metadata is the only source for the presenter
+     "tokens saved" card (null until a real percentage arrives). */
+  const demoQuery = async (tag, query) => {
+    const q = await api('/memory/query', {
+      method: 'POST', body: { session_tag: tag, query, audit: true },
+    })
+    const pct = q?.metadata?.token_estimate_saved_pct
+    if (typeof pct === 'number' && Number.isFinite(pct)) {
+      demoSavedRef.current.push(pct)
+      const avg =
+        demoSavedRef.current.reduce((a, b) => a + b, 0) / demoSavedRef.current.length
+      setPresenterSaved(Math.round(avg * 10) / 10)
     }
-    const stepPause = async (ms) => {
-      if (presenterRef.current) {
-        await new Promise((resolve) => { advanceRef.current = resolve })
-      } else {
-        await wait(ms)
-      }
-      if (runIdRef.current !== myRun) throw new Error(DEMO_ABORTED)
-    }
-    // unique per run so the demo always starts from an empty session
-    const stamp = Date.now().toString(36)
-    const tagA = `demo-${stamp}`
-    const tagB = `demo-${stamp}-next`
-    // audited retrieval: writes a real audit_logs row (provider "demo");
-    // its metadata feeds the presenter "tokens saved" card
-    const demoQuery = async (tag, query) => {
-      const q = await api('/memory/query', {
-        method: 'POST', body: { session_tag: tag, query, audit: true },
-      })
-      const pct = q?.metadata?.token_estimate_saved_pct
-      if (typeof pct === 'number') {
-        demoSavedRef.current.push(pct)
-        const avg =
-          demoSavedRef.current.reduce((a, b) => a + b, 0) / demoSavedRef.current.length
-        setPresenterSaved(Math.round(avg * 10) / 10)
-      }
-      return q
-    }
+    return q
+  }
+
+  /* Runs one beat. Never rejects, never leaves a spinner up. */
+  const runStep = async (idx) => {
+    const ctx = demoCtxRef.current
+    const step = demoSteps[idx]
+    if (!ctx || !step) return
+    setDemoStep(idx + 1)
     try {
-      chatRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-      // fresh sessions so the demo never touches the user's own memory
-      persistSessions([...sessions, tagA, tagB])
-      switchSession(tagA)
-      await tick(400)
-
-      // step 1 — extract: real ingest; state + handle appear live
-      setDemoStep(1)
-      addMsg({ role: 'user', demo: true, content: DEMO_MSGS[0] })
-      focusTab(0)
-      setTyping(true)
-      await tick(700)
-      const ing1 = await api('/memory/ingest', {
-        method: 'POST', body: { session_tag: tagA, text: DEMO_MSGS[0] },
-      })
-      applyIngest(ing1)
-      await refreshVersions(tagA)
-
-      // step 2 — scripted acknowledgement; the disclosure is audited
-      await stepPause(800)
-      setDemoStep(2)
-      await demoQuery(tagA, DEMO_MSGS[0])
-      setTyping(false)
-      addMsg({ role: 'assistant', demo: true, content: DEMO_REPLIES[0] })
-      fetchAudit(tagA, auditScope).catch(() => {})
-
-      // step 3 — new session: cross-session minimal retrieval
-      await stepPause(900)
-      setDemoStep(3)
-      switchSession(tagB, { keep: true })
-      await tick(400)
-      addMsg({ role: 'user', demo: true, content: DEMO_MSGS[1] })
-      setTyping(true)
-      await tick(700)
-      const q = await demoQuery(tagB, DEMO_MSGS[1])
-      setRetrieved(q)
-      focusTab(1)
-      setPulse((p) => p + 1)
-
-      // step 4 — scripted booking reply
-      await stepPause(800)
-      setDemoStep(4)
-      setTyping(false)
-      addMsg({ role: 'assistant', demo: true, content: DEMO_REPLIES[1] })
-
-      // step 5 — back in the first session: state evolves, old handle preserved
-      await stepPause(900)
-      setDemoStep(5)
-      switchSession(tagA, { keep: true })
-      await tick(400)
-      addMsg({ role: 'user', demo: true, content: DEMO_MSGS[2] })
-      setTyping(true)
-      await tick(700)
-      const ing2 = await api('/memory/ingest', {
-        method: 'POST', body: { session_tag: tagA, text: DEMO_MSGS[2] },
-      })
-      applyIngest(ing2)
-      await refreshVersions(tagA)
-      focusTab(2)
-
-      // step 6 — scripted acknowledgement, then the audit trail of it all
-      await stepPause(800)
-      setDemoStep(6)
-      await demoQuery(tagA, DEMO_MSGS[2])
-      setTyping(false)
-      addMsg({ role: 'assistant', demo: true, content: DEMO_REPLIES[2] })
-      await tick(700)
-      await fetchAudit(tagA, auditScope).catch(() => {})
-      focusTab(3)
-      setPulse((p) => p + 1)
+      step.before?.(ctx)
     } catch (err) {
-      if (err.message !== DEMO_ABORTED) {
-        setTyping(false)
-        addMsg({ role: 'assistant', error: true, content: `Demo stopped: ${err.message}` })
+      console.error(`[statejar demo] step ${idx + 1} setup failed:`, err)
+    }
+    if (step.work) setTyping(true)
+    try {
+      if (step.work) {
+        await Promise.race([
+          step.work(ctx),
+          new Promise((_, reject) =>
+            setTimeout(
+              () => reject(new Error(`timed out after ${DEMO_STEP_TIMEOUT_MS}ms`)),
+              DEMO_STEP_TIMEOUT_MS,
+            )),
+        ])
       }
+    } catch (err) {
+      // degraded, not stuck: the scripted beat still lands
+      console.error(`[statejar demo] step ${idx + 1} ${err.message} — continuing with the scripted reply`)
     } finally {
-      // a restart spawns a new run; only the still-current run resets the UI
-      if (runIdRef.current === myRun) {
-        setDemoRunning(false)
-        setDemoStep(0)
+      if (demoCtxRef.current?.runId === ctx.runId) {
+        setTyping(false)
+        if (step.reply) addMsg({ role: 'assistant', demo: true, content: step.reply })
       }
     }
   }
+
+  const clearAutoAdvance = () => {
+    if (autoTimerRef.current) {
+      clearTimeout(autoTimerRef.current)
+      autoTimerRef.current = null
+    }
+  }
+
+  const endDemo = () => {
+    clearAutoAdvance()
+    demoCtxRef.current = null
+    setDemoRunning(false)
+    setDemoStep(0)
+  }
+
+  /* Drives one beat, then hands control back: the presenter advances with
+     Space / "Next", otherwise a timer does. */
+  const driveStep = async (idx) => {
+    const ctx = demoCtxRef.current
+    if (!ctx) return
+    ctx.idx = idx
+    ctx.busy = true
+    await runStep(idx)
+    if (demoCtxRef.current?.runId !== ctx.runId) return // restarted mid-step
+    ctx.busy = false
+    // a Space pressed while this beat was still working is honoured now,
+    // never swallowed — an early tap must not strand the presenter
+    if (ctx.pendingAdvance) {
+      ctx.pendingAdvance = false
+      advanceDemo()
+      return
+    }
+    if (!presenterRef.current) {
+      clearAutoAdvance()
+      autoTimerRef.current = setTimeout(() => advanceDemo(), 1200)
+    }
+  }
+
+  const advanceDemo = () => {
+    const ctx = demoCtxRef.current
+    if (!ctx) return
+    if (ctx.busy) {
+      ctx.pendingAdvance = true
+      return
+    }
+    clearAutoAdvance()
+    const next = ctx.idx + 1
+    if (next >= demoSteps.length) {
+      endDemo()
+      return
+    }
+    void driveStep(next)
+  }
+
+  const startDemo = () => {
+    if (busy) return
+    clearAutoAdvance()
+    // a new run id invalidates any in-flight step from a previous run
+    const runId = ++runIdRef.current
+    const stamp = Date.now().toString(36)
+    const tagA = `demo-${stamp}`
+    const tagB = `demo-${stamp}-next`
+    demoCtxRef.current = { runId, tagA, tagB, idx: -1, busy: false, pendingAdvance: false }
+    demoSavedRef.current = []
+    setPresenterSaved(null)
+    setInput('')
+    setDemoRunning(true)
+    // stray focus must never swallow the presenter's Space key
+    document.activeElement?.blur?.()
+    chatRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    // Clear explicitly and switch with keep:true — letting the session
+    // effect do the clearing would race the first step and wipe its message.
+    setMessages([])
+    setRetrieved(null)
+    // fresh sessions so the demo never touches the user's own memory
+    persistSessions([...sessions, tagA, tagB])
+    switchSession(tagA, { keep: true })
+    void driveStep(0)
+  }
+
+  // stop timers if the component unmounts mid-demo
+  useEffect(() => clearAutoAdvance, [])
 
   const inspect = async (h) => {
     const s = await api(`/memory/state/${h}`)
@@ -642,45 +717,55 @@ export default function Playground() {
     return () => document.body.classList.remove('presenter-mode')
   }, [presenter])
 
-  // Space = advance (or start), R = restart, Esc = exit presenter mode
+  const exitPresenter = () => {
+    setPresenter(false)
+    const next = new URLSearchParams(searchParams)
+    next.delete('presenter')
+    setSearchParams(next, { replace: true })
+  }
+
+  /* Space = start/advance, R = restart, Esc = exit. Bound to window so it
+     fires wherever focus sits; deliberate typing in a field still wins, and
+     Esc there just releases focus so the next Space reaches the demo. */
   useEffect(() => {
     if (!presenter) return
     const onKey = (e) => {
-      const t = e.target.tagName
-      if (t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT') return
-      if (e.code === 'Space') {
+      const el = e.target
+      const tag = el?.tagName
+      const inField =
+        tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el?.isContentEditable
+      if (e.key === 'Escape') {
         e.preventDefault()
-        if (advanceRef.current) {
-          const advance = advanceRef.current
-          advanceRef.current = null
-          advance()
-        } else {
-          runDemoRef.current?.() // idle: Space starts the demo
-        }
+        if (inField) el.blur() // first Esc leaves the field, second exits
+        else exitPresenter()
+        return
+      }
+      if (inField) return // the user meant to type
+      if (e.code === 'Space') {
+        e.preventDefault() // no page scroll, no re-click of a focused button
+        const ctl = demoCtlRef.current
+        if (demoCtxRef.current) ctl.advance?.()
+        else ctl.start?.()
       } else if (e.key === 'r' || e.key === 'R') {
         e.preventDefault()
-        runDemoRef.current?.({ restart: true })
-      } else if (e.key === 'Escape') {
-        setPresenter(false)
-        const next = new URLSearchParams(searchParams)
-        next.delete('presenter')
-        setSearchParams(next, { replace: true })
+        demoCtlRef.current.start?.()
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [presenter, searchParams, setSearchParams])
 
-  // keep the key handler pointed at the latest closure
+  // keep the key handler + on-screen buttons pointed at the latest closures
   useEffect(() => {
-    runDemoRef.current = runDemo
+    demoCtlRef.current = { start: startDemo, advance: advanceDemo }
   })
 
   const locked = busy || demoRunning
 
   return (
     <div className="pg">
-      {presenter && (
+      {/* only shown once a real token_estimate_saved_pct has arrived */}
+      {presenter && presenterSaved !== null && (
         <div className="presenter-counter" role="status" aria-live="polite">
           <span className="presenter-counter-label">Tokens saved this demo</span>
           <span className="presenter-counter-num">
@@ -699,12 +784,23 @@ export default function Playground() {
               Presenter mode — press Space to start the demo
             </span>
           )}
-          <span className="presenter-hint mono">Space next · R restart · Esc exit</span>
+          {/* mouse fallback: a dead key must never strand a live demo */}
+          <span className="presenter-controls">
+            <button type="button" className="presenter-btn" onClick={() => (
+              demoRunning ? advanceDemo() : startDemo()
+            )}>
+              {demoRunning ? 'Next ▸' : 'Start ▸'}
+            </button>
+            <button type="button" className="presenter-btn presenter-btn-ghost" onClick={startDemo}>
+              Restart
+            </button>
+            <span className="presenter-hint mono">Space · R · Esc</span>
+          </span>
         </div>
       )}
       <div className="pg-chat" ref={chatRef}>
         <div className="pg-toolbar">
-          <button className="btn btn-primary pg-mini demo-btn" onClick={() => runDemo()} disabled={locked}>
+          <button className="btn btn-primary pg-mini demo-btn" onClick={startDemo} disabled={locked}>
             {demoRunning ? 'Demo running…' : '▶ Run instant demo'}
           </button>
           <select
@@ -724,6 +820,7 @@ export default function Playground() {
             onChoice={pickModel}
             onCustomChange={editCustomModel}
             disabled={demoRunning}
+            disabledHint="Not used in demo mode"
             openSignal={pickerSignal}
           />
           {modelGone && (
@@ -750,7 +847,7 @@ export default function Playground() {
         <div className="pg-messages">
           {messages.length === 0 && !demoRunning && (
             <div className="pg-hint">
-              <button className="btn btn-primary demo-cta" onClick={() => runDemo()} disabled={locked}>
+              <button className="btn btn-primary demo-cta" onClick={startDemo} disabled={locked}>
                 ▶ Run instant demo
               </button>
               <p className="mono">// no API key needed — watch the memory pipeline run live</p>

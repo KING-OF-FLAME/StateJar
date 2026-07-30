@@ -831,3 +831,41 @@ body.presenter-mode .card, body.presenter-mode .panel { border-color: #D8D2C8; }
   .presenter-caption { right: 20px; top: 84px; }
   .presenter-hint { display: none; }
 }
+
+.mp-disabled { opacity: 0.5; cursor: not-allowed; }
+.presenter-controls { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.presenter-btn {
+  font-family: var(--sans); font-size: 0.85rem; font-weight: 600;
+  padding: 7px 15px; border-radius: 9px; cursor: pointer;
+  background: var(--accent); color: #fff; border: 1px solid var(--accent);
+}
+.presenter-btn:hover { filter: brightness(1.08); }
+.presenter-btn-ghost {
+  background: transparent; color: #E8E3DC; border-color: rgba(232, 227, 220, 0.35);
+}
+.presenter-btn-ghost:hover { border-color: #E8E3DC; filter: none; }
+/* Narrow screens: one full-width caption bar at the top, and the counter
+   moved to the bottom corner so the two can never overlap each other or
+   the transcript. */
+@media (max-width: 900px) {
+  .presenter-caption {
+    top: 10px; left: 10px; right: 10px;
+    flex-wrap: wrap; gap: 8px; padding: 10px 14px;
+  }
+  .presenter-caption-text { font-size: 0.92rem; flex: 1 1 100%; }
+  .presenter-controls { gap: 8px; }
+  .presenter-counter {
+    top: auto; bottom: 12px; right: 12px;
+    flex-direction: row; align-items: baseline; gap: 8px;
+    padding: 8px 14px;
+  }
+  .presenter-counter-num { font-size: 1.25rem; }
+  .presenter-counter-label { font-size: 0.58rem; }
+  body.presenter-mode .shell-main { padding: 104px 14px 24px; }
+  body.presenter-mode .pg { height: auto; }
+  body.presenter-mode .pg-bubble { font-size: 17px; }
+  /* flex children default to min-width:auto, so the larger presenter type
+     in the composer pushed the Send button past the viewport */
+  body.presenter-mode .pg-input { min-width: 0; }
+  body.presenter-mode .pg-input input { min-width: 0; font-size: 0.95rem; }
+}
