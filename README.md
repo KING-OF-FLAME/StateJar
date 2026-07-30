@@ -28,7 +28,7 @@
 
 <table align="center">
   <tr>
-    <td align="center"><b>~78%</b><br><sub>tokens saved</sub></td>
+    <td align="center"><b>70.7%</b><br><sub>tokens saved (measured)</sub></td>
     <td align="center"><b>10</b><br><sub>patent modules</sub></td>
     <td align="center"><b>80</b><br><sub>tests passing</sub></td>
     <td align="center"><b>SHA-256</b><br><sub>deterministic</sub></td>
@@ -86,9 +86,11 @@ Days later, in a brand-new session:
 
 | Approach | What actually happens | Cost |
 |---|---|---|
-| Full replay | Re-sends the entire chat history to find the answer | ~3,900 tokens |
+| Full replay | Re-sends the entire chat history to find the answer | ~350 tokens |
 | Vector recall | Retrieves *similar-looking* text — may or may not contain the budget | unpredictable |
-| **StateJar** | Reaches into the jar for exactly 3 fields: **email · ₹2000 · delivery time (unresolved)** | **~210 tokens** |
+| **StateJar** | Reaches into the jar for only the fields it needs: **email · ₹2000 · delivery time (unresolved)** | **~61 tokens** |
+
+*(Token figures measured by the [benchmark suite](backend/benchmarks/results.md) on the booking turn of a 30-turn conversation.)*
 
 The transcript never touches the LLM — it was never even stored.
 
@@ -108,7 +110,7 @@ The transcript never touches the LLM — it was never even stored.
 
 ## 📈 Benefits
 
-* **Up to 78% fewer tokens**
+* **70.7% fewer tokens** — measured, not estimated ([benchmark](backend/benchmarks/results.md))
 * **Lower inference cost**
 * **Faster response time**
 * **Reduced context-window pressure**
@@ -200,7 +202,7 @@ flowchart LR
     <td width="50%"><b>Playground — live memory inspector</b><br><img src="docs/screenshots/playground.png" width="100%" alt="Playground"/></td>
   </tr>
   <tr>
-    <td width="50%"><b>Minimal retrieval (2 of 14 fields sent, ~78% tokens saved)</b><br><img src="docs/screenshots/retrieval.png" width="100%" alt="Retrieved context"/></td>
+    <td width="50%"><b>Minimal retrieval (2 of 14 fields sent — live per-request % in the Playground)</b><br><img src="docs/screenshots/retrieval.png" width="100%" alt="Retrieved context"/></td>
     <td width="50%"><b>Handle timeline — append-only versioning</b><br><img src="docs/screenshots/handles.png" width="100%" alt="Handles"/></td>
   </tr>
   <tr>
@@ -227,7 +229,16 @@ flowchart LR
 
 ## Benchmark
 
-On the demo scenarios, minimal-disclosure retrieval sends **~48–78% fewer tokens** of context than full-state replay (per-request % computed live and shown in the Playground). Formal benchmark suite lands in Round 2 — *see Roadmap*.
+Measured by [`backend/benchmarks/benchmark.py`](backend/benchmarks/benchmark.py) — a scripted 30-turn, 3-session conversation through the real memory core (no LLM calls, tiktoken `cl100k_base`, offline):
+
+| Metric | Full replay | StateJar |
+|---|---|---|
+| Total tokens sent (30 turns) | 5,808 | **1,699 (−70.7%)** |
+| Mean context per turn | 193.6 tokens | **56.6 tokens** |
+| Determinism (100 shuffled-key canonicalize+hash runs) | — | **1/100 unique handle ✅** |
+| Median canonicalize+hash latency | — | **~1.8 ms** |
+
+Full report with per-turn CSV: [`backend/benchmarks/results.md`](backend/benchmarks/results.md). Run it yourself: `python benchmarks/benchmark.py`.
 
 <br>
 
