@@ -92,6 +92,22 @@ def _get_user_key(db: Session, user_id: int, provider: str) -> str | None:
     return decrypt_key(row) if row is not None else None
 
 
+OLLAMA_PREFIX = "ollama/"
+
+
+def resolve_provider(model: str, provider: str = "openrouter") -> str:
+    """The provider that will actually serve this model id.
+
+    Callers use it to label errors correctly: a request nominally sent to
+    "openrouter" is served by Ollama when the model carries the local prefix.
+    """
+    if provider == "demo":
+        return "demo"
+    if model.startswith(OLLAMA_PREFIX):
+        return "ollama"
+    return provider
+
+
 def chat(
     db: Session,
     user_id: int,
@@ -100,15 +116,32 @@ def chat(
     user_message: str,
     provider: str = "openrouter",
 ) -> dict[str, Any]:
-    """Call the provider's chat API with the user's decrypted key."""
+    """Call the provider's chat API with the user's decrypted key.
+
+    The returned dict always carries a "provider" key naming the provider
+    that actually served the call, so the audit log records the real one
+    rather than what the client asked for.
+    """
     if provider == "demo":  # scripted playground demo: no key, no network
-        return get_provider("demo").chat("", model, system_context, user_message)
+        result = get_provider("demo").chat("", model, system_context, user_message)
+        return {**result, "provider": "demo"}
+
+    # Local models are routed by model id, not by the request's provider, and
+    # are keyless by design — an Ollama daemon has no BYOK credential.
+    if model.startswith(OLLAMA_PREFIX):
+        local_model = model[len(OLLAMA_PREFIX):]
+        result = get_provider("ollama").chat(
+            "", local_model, system_context, user_message
+        )
+        return {**result, "provider": "ollama"}
+
     api_key = _get_user_key(db, user_id, provider)
     if api_key is None:
         raise LookupError(
             f"No {provider} API key saved — add one on the API Keys page to chat."
         )
-    return get_provider(provider).chat(api_key, model, system_context, user_message)
+    result = get_provider(provider).chat(api_key, model, system_context, user_message)
+    return {**result, "provider": provider}
 
 
 # --- model catalog ------------------------------------------------------------
@@ -121,6 +154,13 @@ PAID_MODELS = [
     {"id": "anthropic/claude-sonnet-4.6", "name": "Claude Sonnet 4.6"},
     {"id": "anthropic/claude-haiku-4.5", "name": "Claude Haiku 4.5"},
     {"id": "google/gemini-2.5-flash", "name": "Gemini 2.5 Flash"},
+]
+
+# Keyless models served by a local Ollama daemon. Only surfaced when
+# SHOW_OLLAMA=true — see Settings.show_ollama.
+LOCAL_MODELS = [
+    {"id": "ollama/llama3.2", "name": "Llama 3.2 (local)"},
+    {"id": "ollama/qwen2.5:3b", "name": "Qwen2.5 3B (local)"},
 ]
 
 # Shown when OpenRouter is unreachable or the user has no key yet.
@@ -160,11 +200,19 @@ def _fetch_free_models(api_key: str) -> list[dict[str, Any]]:
     return [{"id": m["id"], "name": m.get("name") or m["id"]} for m in free[:6]]
 
 
+def _catalog(free: list[dict[str, Any]], source: str) -> dict[str, Any]:
+    """Assemble the response; the local group is opt-in via SHOW_OLLAMA."""
+    out: dict[str, Any] = {"free": free, "paid": PAID_MODELS, "source": source}
+    if get_settings().show_ollama:
+        out["local"] = LOCAL_MODELS
+    return out
+
+
 def get_model_catalog(db: Session, user_id: int) -> dict[str, Any]:
-    """Free + paid model groups; free comes live from OpenRouter, cached 1h."""
+    """Free + paid (+ optional local) groups; free is live from OpenRouter, cached 1h."""
     now = time.time()
     if _models_cache["free"] is not None and now - _models_cache["at"] < _MODELS_CACHE_TTL:
-        return {"free": _models_cache["free"], "paid": PAID_MODELS, "source": "live"}
+        return _catalog(_models_cache["free"], "live")
 
     api_key = _get_user_key(db, user_id, "openrouter")
     if api_key is not None:
@@ -172,10 +220,10 @@ def get_model_catalog(db: Session, user_id: int) -> dict[str, Any]:
             free = _fetch_free_models(api_key)
             if free:
                 _models_cache.update(at=now, free=free)
-                return {"free": free, "paid": PAID_MODELS, "source": "live"}
+                return _catalog(free, "live")
         except Exception:  # noqa: BLE001 — any catalog failure degrades to fallback
             pass
-    return {"free": FALLBACK_FREE_MODELS, "paid": PAID_MODELS, "source": "fallback"}
+    return _catalog(FALLBACK_FREE_MODELS, "fallback")
 
 
 # --- routes -------------------------------------------------------------------

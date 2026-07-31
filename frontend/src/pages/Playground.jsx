@@ -17,9 +17,13 @@ const FALLBACK_CATALOG = {
     { id: 'anthropic/claude-haiku-4.5', name: 'Claude Haiku 4.5' },
     { id: 'google/gemini-2.5-flash', name: 'Gemini 2.5 Flash' },
   ],
+  // Local Ollama models: only ever populated from the backend, which serves
+  // them behind SHOW_OLLAMA so production never advertises a laptop daemon.
+  local: [],
 }
 
 const CUSTOM_MODEL = '__custom__'
+const OLLAMA_PREFIX = 'ollama/'
 
 const TABS = ['Memory State', 'Retrieved Context', 'Handles', 'Audit']
 
@@ -196,6 +200,7 @@ function ModelPicker({
           {isCustom ? (customModel.trim() || 'Custom model…') : choice}
         </span>
         {catalog.free.some((m) => m.id === choice) && <span className="badge-free">FREE</span>}
+        {choice.startsWith(OLLAMA_PREFIX) && <span className="badge-offline">OFFLINE</span>}
         <span className="mp-caret" aria-hidden="true">▾</span>
       </button>
 
@@ -224,6 +229,22 @@ function ModelPicker({
               <span className="mp-name mono">{m.id}</span>
             </button>
           ))}
+          {catalog.local?.length > 0 && (
+            <>
+              <p className="mp-group">Local (offline) <span className="mp-note">runs on this machine</span></p>
+              {catalog.local.map((m) => (
+                <button
+                  type="button" key={m.id} role="option" aria-selected={choice === m.id}
+                  className={`mp-item${choice === m.id ? ' active' : ''}`}
+                  onClick={() => pick(m.id)}
+                  title={m.name}
+                >
+                  <span className="mp-name mono">{m.id}</span>
+                  <span className="badge-offline">OFFLINE</span>
+                </button>
+              ))}
+            </>
+          )}
           <button
             type="button" role="option" aria-selected={isCustom}
             className={`mp-item mp-custom${isCustom ? ' active' : ''}`}
@@ -258,6 +279,7 @@ export default function Playground() {
   const [modelChoice, setModelChoice] = useState(
     () => localStorage.getItem('statejar_model') || FALLBACK_CATALOG.free[0].id)
   const [modelGone, setModelGone] = useState(false)   // selected model vanished from OpenRouter
+  const [ollamaDown, setOllamaDown] = useState(false) // local daemon unreachable
   const [pickerSignal, setPickerSignal] = useState(0) // bump to force the picker open
   const [customModel, setCustomModel] = useState(
     () => localStorage.getItem('statejar_custom_model') || '')
@@ -309,6 +331,7 @@ export default function Playground() {
   const pickModel = (value) => {
     setModelChoice(value)
     setModelGone(false)
+    setOllamaDown(false)
     localStorage.setItem('statejar_model', value)
   }
 
@@ -318,9 +341,10 @@ export default function Playground() {
     api('/models')
       .then((cat) => {
         if (!cat.free?.length) return
-        setCatalog({ free: cat.free, paid: cat.paid })
+        setCatalog({ free: cat.free, paid: cat.paid, local: cat.local || [] })
         setModelChoice((current) => {
-          const known = [...cat.free, ...cat.paid].some((m) => m.id === current)
+          const known = [...cat.free, ...cat.paid, ...(cat.local || [])]
+            .some((m) => m.id === current)
           if (current === CUSTOM_MODEL || known) return current
           localStorage.setItem('statejar_model', cat.free[0].id)
           return cat.free[0].id
@@ -338,11 +362,18 @@ export default function Playground() {
   const effectiveModel =
     modelChoice === CUSTOM_MODEL ? (customModel.trim() || catalog.free[0].id) : modelChoice
 
-  /* OpenRouter's 404 for a delisted/renamed model — surface a hint and reopen the picker. */
+  /* Turn a provider failure into an actionable hint. The backend's exact
+     message is always shown in the error bubble; these chips add the fix. */
   const flagIfModelGone = (err) => {
-    if (/no endpoints found/i.test(err.message || '')) {
+    const msg = err.message || ''
+    if (/no endpoints found/i.test(msg)) {
       setModelGone(true)
       setPickerSignal((n) => n + 1)
+    }
+    // only when the daemon itself is unreachable — "ollama serve" is no fix
+    // for e.g. "model requires more system memory"
+    if (effectiveModel.startsWith(OLLAMA_PREFIX) && /not reachable|ollama serve/i.test(msg)) {
+      setOllamaDown(true)
     }
   }
 
@@ -827,6 +858,9 @@ export default function Playground() {
             <span className="chip chip-warn">
               This model is no longer available — pick another
             </span>
+          )}
+          {ollamaDown && (
+            <span className="chip chip-warn mono">Start Ollama locally: ollama serve</span>
           )}
         </div>
 

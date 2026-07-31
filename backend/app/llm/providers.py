@@ -1,15 +1,27 @@
 """LLM provider adapters for StateJar.
 
-Only OpenRouter is implemented in Round 1; the other providers are
-placeholders so the gateway's provider registry is already extensible.
+OpenRouter (hosted, BYOK) and Ollama (local, keyless) are implemented; the
+remaining providers are placeholders so the gateway's registry stays
+extensible.
 """
 
 from __future__ import annotations
 
+import time
 from abc import ABC, abstractmethod
 from typing import Any
 
 import httpx
+
+from app.config import get_settings
+
+
+class ProviderUnavailableError(RuntimeError):
+    """Provider endpoint could not be reached.
+
+    The message is written for the end user and is surfaced verbatim by the
+    /chat route, so it must stay actionable.
+    """
 
 
 class LLMProvider(ABC):
@@ -115,10 +127,67 @@ class GeminiProvider(LLMProvider):
 
 
 class OllamaProvider(LLMProvider):
+    """A locally running Ollama daemon — no API key, no network egress.
+
+    Keeps the shared provider signature (the leading `api_key` is accepted
+    and ignored) so the gateway registry needs no special-casing. The
+    returned dict is a superset of the shared shape: `content`/`model`/
+    `usage`/`raw` for existing callers, plus the `text`/`tokens_in`/
+    `tokens_out`/`latency_ms` fields.
+    """
+
     name = "ollama"
 
-    def chat(self, api_key: str, model: str, system_context: str, user_message: str) -> dict[str, Any]:
-        raise NotImplementedError("Ollama provider is planned for a later round")
+    def __init__(self, timeout: float = 60.0) -> None:
+        self._timeout = timeout
+
+    @property
+    def base_url(self) -> str:
+        # read per call so a redeploy / test can repoint the daemon
+        return get_settings().ollama_base_url.rstrip("/")
+
+    def chat(
+        self, api_key: str, model: str, system_context: str, user_message: str
+    ) -> dict[str, Any]:
+        base_url = self.base_url
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_context},
+                {"role": "user", "content": user_message},
+            ],
+            "stream": False,
+        }
+        started = time.perf_counter()
+        try:
+            response = httpx.post(
+                f"{base_url}/api/chat", json=payload, timeout=self._timeout
+            )
+        except httpx.ConnectError as exc:
+            raise ProviderUnavailableError(
+                f"Ollama not reachable at {base_url} — is `ollama serve` running?"
+            ) from exc
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        response.raise_for_status()
+        data = response.json()
+
+        text = (data.get("message") or {}).get("content", "")
+        tokens_in = data.get("prompt_eval_count") or 0
+        tokens_out = data.get("eval_count") or 0
+        return {
+            "content": text,
+            "text": text,
+            "model": data.get("model") or model,
+            "tokens_in": tokens_in,
+            "tokens_out": tokens_out,
+            "latency_ms": latency_ms,
+            "usage": {
+                "prompt_tokens": tokens_in,
+                "completion_tokens": tokens_out,
+                "total_tokens": tokens_in + tokens_out,
+            },
+            "raw": data,
+        }
 
 
 PROVIDERS: dict[str, LLMProvider] = {

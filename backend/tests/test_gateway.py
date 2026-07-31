@@ -149,7 +149,8 @@ def test_build_system_context() -> None:
 
 
 def test_placeholder_providers_raise() -> None:
-    for name in ("openai", "anthropic", "gemini", "ollama"):
+    # ollama is implemented now — see tests/test_ollama.py
+    for name in ("openai", "anthropic", "gemini"):
         with pytest.raises(NotImplementedError):
             get_provider(name).chat("k", "m", "s", "u")
 

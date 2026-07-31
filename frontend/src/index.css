@@ -869,3 +869,10 @@ body.presenter-mode .card, body.presenter-mode .panel { border-color: #D8D2C8; }
   body.presenter-mode .pg-input { min-width: 0; }
   body.presenter-mode .pg-input input { min-width: 0; font-size: 0.95rem; }
 }
+
+/* local Ollama models — grey, to read as "not a hosted option" */
+.badge-offline {
+  font-size: 0.62rem; font-weight: 700; letter-spacing: 0.05em;
+  padding: 2px 7px; border-radius: 999px; flex-shrink: 0;
+  background: #ECEAE6; color: #6B6B7B; border: 1px solid #DAD6CE;
+}

@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.auth.routes import UserOut, get_current_user
 from app.database import get_db
 from app.llm import gateway
+from app.llm.providers import ProviderUnavailableError
 from app.memory.audit import AuditLogger
 from app.memory.canonicalizer import NORM_VERSION, SCHEMA_VERSION, canonicalize
 from app.memory.extractor import extract_state
@@ -137,6 +138,9 @@ def chat(
 ) -> dict[str, Any]:
     handle, result = _query_subset(db, user.id, body.session_tag, body.query)
     system_context = gateway.build_system_context(handle, result["subset"])
+    # the model id can override the requested provider (e.g. ollama/*), so
+    # error messages must name the provider that actually handled the call
+    served_by = gateway.resolve_provider(body.model, body.provider)
 
     try:
         llm_result = gateway.chat(
@@ -146,28 +150,34 @@ def chat(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
     except NotImplementedError as exc:
         raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, str(exc))
+    except ProviderUnavailableError as exc:
+        # already written for the end user (e.g. "is `ollama serve` running?")
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc))
     except httpx.TimeoutException:
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY,
-            f"Provider error: {body.provider} timed out — try again.",
+            f"Provider error: {served_by} timed out — try again.",
         )
     except httpx.HTTPStatusError as exc:
-        reason = f"{body.provider} returned HTTP {exc.response.status_code}"
+        reason = f"{served_by} returned HTTP {exc.response.status_code}"
         try:  # surface the provider's own message when it sends one
             err = exc.response.json()["error"]
-            reason = err["message"]
-            # OpenRouter puts the useful upstream detail (e.g. "temporarily
-            # rate-limited upstream") in metadata.raw
-            raw = (err.get("metadata") or {}).get("raw")
-            if isinstance(raw, str) and raw and raw not in reason:
-                reason = f"{reason} — {raw[:300]}"
+            if isinstance(err, str):
+                # Ollama: {"error": "model requires more system memory (…)"}
+                reason = err
+            else:
+                # OpenRouter: {"error": {"message": …, "metadata": {"raw": …}}}
+                reason = err["message"]
+                raw = (err.get("metadata") or {}).get("raw")
+                if isinstance(raw, str) and raw and raw not in reason:
+                    reason = f"{reason} — {raw[:300]}"
         except Exception:  # noqa: BLE001 — any shape of error body
             pass
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Provider error: {reason}")
     except httpx.HTTPError as exc:
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY,
-            f"Provider error: could not reach {body.provider} ({exc.__class__.__name__}).",
+            f"Provider error: could not reach {served_by} ({exc.__class__.__name__}).",
         )
 
     request_id = uuid.uuid4().hex
@@ -176,7 +186,9 @@ def chat(
         user_id=user.id,
         handle_used=handle,
         subset_keys=result["metadata"]["subset_keys"],
-        provider=body.provider,
+        # the gateway may route by model id (e.g. ollama/*), so trust the
+        # provider that actually served the call over the requested one
+        provider=llm_result.get("provider", body.provider),
         model=llm_result["model"],
         schema_version=SCHEMA_VERSION,
         norm_version=NORM_VERSION,

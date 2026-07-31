@@ -20,6 +20,11 @@ class Settings(BaseSettings):
         "https://statejar.com",
         "https://www.statejar.com",
     ]
+    # --- local (Ollama) models ---
+    ollama_base_url: str = "http://localhost:11434"
+    # Off by default so production statejar.com never advertises models that
+    # only exist on a laptop; set SHOW_OLLAMA=true for local/offline demos.
+    show_ollama: bool = False
 
 
 @lru_cache
