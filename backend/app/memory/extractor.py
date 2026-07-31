@@ -1,42 +1,76 @@
 """Structured conversational-state extraction for StateJar.
 
-Primary path is deterministic rule-based extraction (regex + keyword
-patterns). If the optional GLiNER2 package is importable, its entity
-predictions are merged in as a secondary signal; any GLiNER2 failure
-falls back silently to the rule-based result.
+Deterministic rule-based extraction (regex + keyword patterns) is the only
+path that ever runs in production. An optional GLiNER neural layer can be
+switched on with EXTRACTOR_MODE=gliner; it only ever *fills gaps* the rules
+left empty — a rule-extracted value is never overwritten.
+
+Production safety:
+  * gliner/torch live in requirements-ml.txt, never requirements.txt.
+  * The import and the model load are both deferred to first use, so a
+    deployment without the extras pays nothing and startup never blocks.
+  * Any failure (missing package, download error, bad prediction) logs once
+    and falls back to the rule result.
 """
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any
 
 from pydantic import BaseModel, Field
 
-# --- optional GLiNER2 support -------------------------------------------------
+from app.config import get_settings
 
-try:  # pragma: no cover - depends on environment
-    from gliner2 import GLiNER2  # type: ignore
+logger = logging.getLogger(__name__)
 
-    _GLINER_AVAILABLE = True
-except Exception:  # ImportError or any transitive failure
-    GLiNER2 = None  # type: ignore
-    _GLINER_AVAILABLE = False
+# --- optional GLiNER layer ----------------------------------------------------
 
-_gliner_model: Any | None = None
+# Values reported as `extraction_source`. They are metadata only and never
+# enter the canonicalized state, so they cannot affect a handle.
+SOURCE_RULES = "rules"
+SOURCE_GLINER = "gliner+rules"
+
+GLINER_MODEL_NAME = "urchade/gliner_multi-v2.1"
+
+# Free-text entity types; GLiNER is zero-shot so these are the prompt.
+GLINER_LABELS = [
+    "person name",
+    "money amount",
+    "date or deadline",
+    "contact preference",
+    "decision",
+]
+
+# Loaded at most once per process — a failed attempt is never retried, so a
+# missing package costs one log line rather than an import storm.
+_gliner_state: dict[str, Any] = {"attempted": False, "model": None}
 
 
-def _get_gliner_model() -> Any | None:
-    """Lazily load the GLiNER2 model; return None on any failure."""
-    global _gliner_model
-    if not _GLINER_AVAILABLE:
-        return None
-    if _gliner_model is None:
-        try:  # pragma: no cover - depends on environment
-            _gliner_model = GLiNER2.from_pretrained("fastino/gliner2-base")
-        except Exception:
-            return None
-    return _gliner_model
+def _gliner_enabled() -> bool:
+    return get_settings().extractor_mode.strip().lower() == "gliner"
+
+
+def _load_gliner_model() -> Any | None:
+    """Import and load the GLiNER model once. Returns None on any failure."""
+    if _gliner_state["attempted"]:
+        return _gliner_state["model"]
+    _gliner_state["attempted"] = True
+    try:  # pragma: no cover - requires the optional ML extras
+        from gliner import GLiNER  # imported here: torch is slow to import
+
+        _gliner_state["model"] = GLiNER.from_pretrained(GLINER_MODEL_NAME)
+        logger.info("GLiNER extraction layer loaded (%s)", GLINER_MODEL_NAME)
+    except Exception as exc:  # noqa: BLE001 — missing extras must never crash
+        logger.warning(
+            "GLiNER unavailable (%s: %s) — falling back to rule-based extraction. "
+            "Install backend/requirements-ml.txt to enable it.",
+            exc.__class__.__name__,
+            exc,
+        )
+        _gliner_state["model"] = None
+    return _gliner_state["model"]
 
 
 # --- output schema ------------------------------------------------------------
@@ -178,42 +212,112 @@ def _extract_rules(text: str) -> StructuredState:
     return state
 
 
-# --- GLiNER2 merge ------------------------------------------------------------
+# --- GLiNER merge -------------------------------------------------------------
 
-_GLINER_LABELS = ["person", "money", "date", "product"]
+# "40k" / "2,000" / "₹1.5 lakh"
+_MONEY_RE = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*(k|lakh|lakhs|cr|crore)?", re.IGNORECASE)
+_MONEY_SCALE = {"k": 1_000, "lakh": 100_000, "lakhs": 100_000, "cr": 10_000_000, "crore": 10_000_000}
 
 
-def _merge_gliner(text: str, state: StructuredState) -> StructuredState:
-    """Merge GLiNER2 entity predictions into a rule-based state. Never raises."""
-    model = _get_gliner_model()
+def _parse_money(value: str) -> int | None:
+    """Best-effort amount from a money span; None when nothing parses."""
+    m = _MONEY_RE.search(value)
+    if not m:
+        return None
+    try:
+        amount = float(m.group(1).replace(",", ""))
+    except ValueError:
+        return None
+    amount *= _MONEY_SCALE.get((m.group(2) or "").lower(), 1)
+    return int(amount) if amount > 0 else None
+
+
+def _contact_mode_from(phrase: str) -> str | None:
+    """Map a free-text preference span onto a known contact mode."""
+    for mode, pat in _CONTACT_MODES.items():
+        if pat.search(phrase) and not _is_negated(phrase, mode):
+            return mode
+    return None
+
+
+def _predict_entities(model: Any, text: str) -> list[dict[str, Any]]:
+    """Call whichever prediction API this model object exposes."""
+    if hasattr(model, "predict_entities"):
+        raw = model.predict_entities(text, GLINER_LABELS)
+    else:  # gliner2-style API
+        raw = model.extract_entities(text, GLINER_LABELS)
+    if isinstance(raw, dict):
+        raw = raw.get("entities", [])
+    return [e for e in (raw or []) if isinstance(e, dict)]
+
+
+def _merge_gliner(text: str, state: StructuredState) -> bool:
+    """Fill gaps in `state` from GLiNER spans, in place.
+
+    Rule-extracted values always win: every write below is conditional on the
+    field being absent. Returns True when the model actually ran.
+    """
+    model = _load_gliner_model()
     if model is None:
-        return state
-    try:  # pragma: no cover - depends on environment
-        entities = model.extract_entities(text, _GLINER_LABELS)
-        for ent in entities.get("entities", []) if isinstance(entities, dict) else entities:
-            label = str(ent.get("label", "")).lower()
-            value = str(ent.get("text", "")).strip()
-            if not value:
-                continue
-            if label == "person":
-                state.facts.setdefault("name", value)
-            elif label == "date":
-                state.constraints.setdefault("deadline", value)
-            elif label == "product":
-                state.facts.setdefault("product", value)
-    except Exception:
-        pass
-    return state
+        return False
+    try:
+        entities = _predict_entities(model, text)
+    except Exception as exc:  # noqa: BLE001 — a bad prediction must not 500
+        logger.warning("GLiNER prediction failed (%s) — using rules only", exc)
+        return False
+
+    for ent in entities:
+        label = str(ent.get("label", "")).strip().lower()
+        value = str(ent.get("text", "")).strip()
+        if not value:
+            continue
+
+        if label == "person name":
+            state.facts.setdefault("name", value)
+
+        elif label == "money amount":
+            # skip entirely if the rules already found any budget figure —
+            # adding the other key would fabricate a second, conflicting one
+            if "budget_inr" not in state.constraints and "budget_inr_max" not in state.constraints:
+                amount = _parse_money(value)
+                if amount is not None:
+                    key = (
+                        "budget_inr_max"
+                        if _BUDGET_MAX_QUAL_RE.search(text)
+                        else "budget_inr"
+                    )
+                    state.constraints[key] = amount
+
+        elif label == "date or deadline":
+            state.constraints.setdefault("deadline", value)
+
+        elif label == "contact preference":
+            if "contact_mode" not in state.preferences and not state.conflicts:
+                if mode := _contact_mode_from(value):
+                    state.preferences["contact_mode"] = mode
+
+        elif label == "decision":
+            state.decisions.setdefault("choice", value)
+
+    return True
 
 
 # --- public API ---------------------------------------------------------------
 
 
-def extract_state(text: str) -> StructuredState:
-    """Extract a StructuredState from raw user text.
+def extract_state_with_source(text: str) -> tuple[StructuredState, str]:
+    """Extract state plus the layer that produced it.
 
-    Rule-based extraction always runs; GLiNER2 results are merged in only
-    when the package is available and functional.
+    The source is metadata for the UI only — it is deliberately *not* part of
+    StructuredState, so canonicalization and therefore the handle are
+    identical whichever extractor ran.
     """
     state = _extract_rules(text)
-    return _merge_gliner(text, state)
+    if _gliner_enabled() and _merge_gliner(text, state):
+        return state, SOURCE_GLINER
+    return state, SOURCE_RULES
+
+
+def extract_state(text: str) -> StructuredState:
+    """Extract a StructuredState from raw user text."""
+    return extract_state_with_source(text)[0]

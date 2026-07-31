@@ -876,3 +876,9 @@ body.presenter-mode .card, body.presenter-mode .panel { border-color: #D8D2C8; }
   padding: 2px 7px; border-radius: 999px; flex-shrink: 0;
   background: #ECEAE6; color: #6B6B7B; border: 1px solid #DAD6CE;
 }
+
+/* which extraction layer produced the current state — metadata, not content */
+.chip-meta {
+  background: #F1EFEB; color: #6B6B7B; border: 1px solid #E2DED6;
+  font-size: 0.68rem; display: inline-block; margin-bottom: 10px;
+}

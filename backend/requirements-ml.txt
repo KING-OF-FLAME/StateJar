@@ -1,0 +1,15 @@
+# Optional ML extras for the GLiNER extraction layer.
+#
+# DELIBERATELY NOT in requirements.txt: Railway installs only that file, so
+# the production image stays small and the build never times out on torch.
+# Install locally when you want EXTRACTOR_MODE=gliner:
+#
+#     pip install -r requirements-ml.txt
+#
+# Without these packages the extractor silently stays on the rule engine.
+
+# CPU-only torch wheels — avoids pulling the multi-GB CUDA build.
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+torch>=2.2,<3
+gliner>=0.2.13

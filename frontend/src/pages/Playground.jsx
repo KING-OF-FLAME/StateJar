@@ -293,6 +293,7 @@ export default function Playground() {
   const [tab, setTab] = useState(0)
   const [state, setState] = useState(null)          // current memory state
   const [handle, setHandle] = useState(null)
+  const [extractionSource, setExtractionSource] = useState(null) // "rules" | "gliner+rules"
   const [changed, setChanged] = useState(null)      // dotted paths updated by last ingest
   const [copied, setCopied] = useState(false)
   const [retrieved, setRetrieved] = useState(null)  // last query subset + metadata
@@ -387,6 +388,7 @@ export default function Playground() {
 
   const applyIngest = (ing) => {
     setChanged(new Set(diffPaths(stateRef.current, ing.state)))
+    if (ing.extraction_source) setExtractionSource(ing.extraction_source)
     stateRef.current = ing.state
     setState(ing.state)
     setHandle(ing.handle)
@@ -946,6 +948,11 @@ export default function Playground() {
                 </>
               ) : (
                 <>
+                  {extractionSource && (
+                    <span className="chip chip-meta mono" title="Which extraction layer produced this state">
+                      extraction: {extractionSource}
+                    </span>
+                  )}
                   {handle && (
                     <p className="pg-handle-line mono">
                       handle: <span className="hl-accent">{handle}</span>

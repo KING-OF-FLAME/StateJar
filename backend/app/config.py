@@ -20,6 +20,11 @@ class Settings(BaseSettings):
         "https://statejar.com",
         "https://www.statejar.com",
     ]
+    # --- extraction ---
+    # "rules" (default, production) or "gliner" to additionally run the
+    # optional neural layer from requirements-ml.txt. Anything unavailable
+    # degrades silently back to rules.
+    extractor_mode: str = "rules"
     # --- local (Ollama) models ---
     ollama_base_url: str = "http://localhost:11434"
     # Off by default so production statejar.com never advertises models that

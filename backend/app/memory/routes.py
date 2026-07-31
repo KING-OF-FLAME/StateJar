@@ -16,7 +16,7 @@ from app.llm import gateway
 from app.llm.providers import ProviderUnavailableError
 from app.memory.audit import AuditLogger
 from app.memory.canonicalizer import NORM_VERSION, SCHEMA_VERSION, canonicalize
-from app.memory.extractor import extract_state
+from app.memory.extractor import extract_state_with_source
 from app.memory.handle import generate_handle
 from app.memory.retriever import retrieve_minimum
 from app.memory.storage import MemoryStore
@@ -61,7 +61,8 @@ def ingest(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     store = _store(db)
-    extracted = extract_state(body.text).model_dump()
+    extracted_state, extraction_source = extract_state_with_source(body.text)
+    extracted = extracted_state.model_dump()
 
     parent_handle = store.get_latest_handle(user.id, body.session_tag)
     if parent_handle is not None:
@@ -83,6 +84,9 @@ def ingest(
         "parent_handle": parent_handle,
         "state": new_state,
         "conflicts": new_state.get("conflicts", []),
+        # metadata only — deliberately outside `state`, so it never
+        # reaches canonicalization and cannot change the handle
+        "extraction_source": extraction_source,
     }
 
 
