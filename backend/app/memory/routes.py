@@ -10,7 +10,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.auth.routes import UserOut, get_current_user
+from app.apikeys import get_api_caller
+from app.auth.routes import UserOut
 from app.database import get_db
 from app.llm import gateway
 from app.llm.providers import ProviderUnavailableError
@@ -58,7 +59,7 @@ class ChatRequest(QueryRequest):
 @router.post("/memory/ingest")
 def ingest(
     body: IngestRequest,
-    user: UserOut = Depends(get_current_user),
+    user: UserOut = Depends(get_api_caller),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     store = _store(db)
@@ -109,7 +110,7 @@ def _query_subset(
 @router.post("/memory/query")
 def query(
     body: QueryRequest,
-    user: UserOut = Depends(get_current_user),
+    user: UserOut = Depends(get_api_caller),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     handle, result = _query_subset(db, user.id, body.session_tag, body.query)
@@ -142,7 +143,7 @@ def query(
 def chat(
     request: Request,
     body: ChatRequest,
-    user: UserOut = Depends(get_current_user),
+    user: UserOut = Depends(get_api_caller),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     handle, result = _query_subset(db, user.id, body.session_tag, body.query)
@@ -213,7 +214,7 @@ def chat(
 
 @router.get("/memory/stats")
 def stats(
-    user: UserOut = Depends(get_current_user),
+    user: UserOut = Depends(get_api_caller),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Dashboard summary: counts, latest handles, and token-saved estimate."""
@@ -276,7 +277,7 @@ def stats(
 @router.get("/memory/state/{handle}")
 def state_by_handle(
     handle: str,
-    user: UserOut = Depends(get_current_user),
+    user: UserOut = Depends(get_api_caller),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Inspect any state in the user's version chain by its handle."""
@@ -295,7 +296,7 @@ def state_by_handle(
 @router.get("/memory/versions")
 def versions(
     session_tag: str,
-    user: UserOut = Depends(get_current_user),
+    user: UserOut = Depends(get_api_caller),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     return {"session_tag": session_tag, "versions": _store(db).list_versions(user.id, session_tag)}
@@ -305,10 +306,95 @@ def versions(
 def audit_trail(
     limit: int = 50,
     session_tag: str | None = None,
-    user: UserOut = Depends(get_current_user),
+    user: UserOut = Depends(get_api_caller),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     entries = _audit(db).get_audit_trail(user.id, limit=limit, session_tag=session_tag)
     for e in entries:
         e["created_at"] = e["created_at"].isoformat()
     return {"entries": entries}
+
+
+# --- developer API usage ------------------------------------------------------
+
+# Rough chars-per-token for English + JSON; good enough for an estimate and
+# stated as such, rather than pretending to a tokenizer's precision.
+_CHARS_PER_TOKEN = 4
+
+
+@router.get("/usage")
+def usage(
+    user: UserOut = Depends(get_api_caller),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Account usage for the developer API.
+
+    `est_tokens_saved` sums the retriever's work across every audited
+    disclosure: for each request, how much smaller the subset actually sent
+    was than the full state it came from.
+    """
+    from datetime import datetime, time, timezone
+
+    from sqlalchemy import func, select
+
+    from app.memory.audit import audit_logs
+    from app.memory.storage import memory_states as ms
+
+    midnight_utc = datetime.combine(datetime.now(timezone.utc).date(), time.min)
+
+    requests_today = db.execute(
+        select(func.count())
+        .select_from(audit_logs)
+        .where(audit_logs.c.user_id == user.id)
+        .where(audit_logs.c.created_at >= midnight_utc)
+    ).scalar_one()
+    total_audit_rows = db.execute(
+        select(func.count()).select_from(audit_logs).where(audit_logs.c.user_id == user.id)
+    ).scalar_one()
+    total_states = db.execute(
+        select(func.count()).select_from(ms).where(ms.c.user_id == user.id)
+    ).scalar_one()
+
+    rows = db.execute(
+        select(audit_logs.c.handle_used, audit_logs.c.subset_keys)
+        .where(audit_logs.c.user_id == user.id)
+        .where(audit_logs.c.handle_used.is_not(None))
+    ).mappings().all()
+
+    store = _store(db)
+    state_cache: dict[str, dict[str, Any] | None] = {}
+    saved_chars = 0
+    for row in rows:
+        handle = row["handle_used"]
+        if handle not in state_cache:  # many requests share one handle
+            found = store.get_state(handle, user_id=user.id)
+            state_cache[handle] = found["state_json"] if found else None
+        state = state_cache[handle]
+        if state is None:
+            continue
+        subset = _subset_from_keys(state, row["subset_keys"] or [])
+        full_len = len(json.dumps(state, ensure_ascii=False))
+        subset_len = len(json.dumps(subset, ensure_ascii=False))
+        saved_chars += max(0, full_len - subset_len)
+
+    return {
+        "requests_today": requests_today,
+        "total_states": total_states,
+        "total_audit_rows": total_audit_rows,
+        "est_tokens_saved": saved_chars // _CHARS_PER_TOKEN,
+    }
+
+
+def _subset_from_keys(state: dict[str, Any], keys: list[str]) -> dict[str, Any]:
+    """Rebuild the disclosed subset from its dotted keys (audit replay shape)."""
+    subset: dict[str, Any] = {}
+    for dotted in keys:
+        section, _, key = dotted.partition(".")
+        container = state.get(section)
+        if isinstance(container, dict) and key in container:
+            subset.setdefault(section, {})[key] = container[key]
+        elif isinstance(container, list):
+            matches = [e for e in container if isinstance(e, dict) and e.get("field") == key]
+            if matches:
+                subset.setdefault(section, []).extend(matches)
+    return subset

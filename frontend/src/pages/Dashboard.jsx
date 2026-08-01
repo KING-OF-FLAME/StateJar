@@ -18,11 +18,15 @@ function CopyButton({ text }) {
 
 export default function Dashboard() {
   const [stats, setStats] = useState(null)
+  const [usage, setUsage] = useState(null)
   const [error, setError] = useState('')
 
   useEffect(() => {
     api('/memory/stats').then(setStats).catch((e) => setError(e.message))
+    api('/usage').then(setUsage).catch(() => {}) // secondary panel: never blocks the page
   }, [])
+
+  const num = (v) => (v == null ? '—' : v.toLocaleString())
 
   return (
     <>
@@ -55,6 +59,38 @@ export default function Dashboard() {
             {stats?.token_saved_pct != null ? `${stats.token_saved_pct}%` : '—'}
           </span>
           <span className="stat-note">minimal disclosure vs full state</span>
+        </div>
+      </div>
+
+      <div className="page-head" style={{ marginBottom: 14 }}>
+        <div>
+          <h3 style={{ fontSize: '1.15rem' }}>Developer API usage</h3>
+          <p className="page-sub">
+            Same numbers your <span className="mono">X-API-Key</span> integrations see at{' '}
+            <span className="mono">GET /api/v1/usage</span>.
+          </p>
+        </div>
+        <Link className="btn btn-ghost" to="/api-keys">Manage API keys</Link>
+      </div>
+
+      <div className="stat-grid">
+        <div className="stat-card">
+          <span className="stat-label">Requests today</span>
+          <span className="stat-value">{num(usage?.requests_today)}</span>
+          <span className="stat-note">audited disclosures since 00:00 UTC</span>
+        </div>
+        <div className="stat-card">
+          <span className="stat-label">Total states</span>
+          <span className="stat-value">{num(usage?.total_states)}</span>
+        </div>
+        <div className="stat-card">
+          <span className="stat-label">Audit rows</span>
+          <span className="stat-value">{num(usage?.total_audit_rows)}</span>
+        </div>
+        <div className="stat-card stat-green">
+          <span className="stat-label">Est. tokens saved</span>
+          <span className="stat-value">{num(usage?.est_tokens_saved)}</span>
+          <span className="stat-note">summed across every disclosure</span>
         </div>
       </div>
 

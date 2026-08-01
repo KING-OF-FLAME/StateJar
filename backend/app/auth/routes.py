@@ -77,11 +77,14 @@ def login(
     return TokenOut(access_token=create_access_token(row["id"], row["email"]))
 
 
-def get_current_user(
-    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
-    db: Session = Depends(get_db),
+def user_from_bearer(
+    credentials: HTTPAuthorizationCredentials | None, db: Session
 ) -> UserOut:
-    """JWT dependency for protected routes."""
+    """Resolve a bearer token to its user, or raise 401.
+
+    Shared with the developer-API dependency so both entry points validate a
+    JWT identically — the console flow is the one implementation.
+    """
     if credentials is None:
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED,
@@ -101,3 +104,11 @@ def get_current_user(
     if row is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "user no longer exists")
     return UserOut(id=row["id"], email=row["email"])
+
+
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    db: Session = Depends(get_db),
+) -> UserOut:
+    """JWT dependency for console routes (account and key management)."""
+    return user_from_bearer(credentials, db)

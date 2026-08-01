@@ -11,6 +11,7 @@ StateJar is ever scaled out, point the limiter at Redis via
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Awaitable, Callable
 
 import jwt as pyjwt
@@ -32,11 +33,19 @@ CHAT_LIMIT = "60/hour"        # provider-key abuse / cost exhaustion
 def user_or_ip(request: Request) -> str:
     """Rate-limit key for authenticated endpoints.
 
-    Keyed on the JWT subject so one abusive account cannot burn the quota of
-    everyone else behind the same NAT, and so rotating IPs does not reset a
-    user's budget. Falls back to the client address when there is no usable
-    token — an unauthenticated request is rejected by the route anyway.
+    Keyed on the caller's identity — developer API key first, then the JWT
+    subject — so one abusive account cannot burn the quota of everyone else
+    behind the same NAT, and rotating IPs does not reset a budget. Falls back
+    to the client address when there is no usable credential; such a request
+    is rejected by the route anyway.
     """
+    api_key = request.headers.get("x-api-key", "")
+    if api_key:
+        # hashed, never raw: this string reaches limiter storage and any
+        # metrics derived from it
+        digest = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+        return f"key:{digest[:32]}"
+
     header = request.headers.get("authorization", "")
     scheme, _, token = header.partition(" ")
     if scheme.lower() == "bearer" and token:

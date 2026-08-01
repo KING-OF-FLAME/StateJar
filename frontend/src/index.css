@@ -465,6 +465,41 @@ footer {
 .empty-note a { color: var(--accent); }
 
 .key-saved { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+
+/* --- developer API keys --- */
+.btn-danger { background: var(--accent); color: #fff; border-color: var(--accent); }
+.btn-danger:hover { filter: brightness(0.94); }
+
+/* one-time plaintext reveal: deliberately loud, it is never shown again */
+.key-reveal {
+  border: 1px solid var(--accent); background: var(--accent-soft);
+  border-radius: 10px; padding: 16px; margin-bottom: 18px;
+}
+.key-reveal-head { display: flex; flex-direction: column; gap: 3px; margin-bottom: 12px; }
+.key-reveal-head strong { font-size: 0.95rem; }
+.key-reveal-head span { font-size: 0.78rem; color: var(--ink-soft); }
+.key-reveal-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.key-reveal-row code {
+  flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 0.82rem;
+  background: var(--card); border: 1px solid var(--line);
+  border-radius: 7px; padding: 9px 12px;
+}
+
+.apikey-list { list-style: none; margin-top: 20px; display: flex; flex-direction: column; gap: 10px; }
+.apikey-list li {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  border: 1px solid var(--line); border-radius: 9px; padding: 11px 14px;
+}
+.apikey-list li > .mono { font-size: 0.85rem; }
+.apikey-list li > .btn, .apikey-confirm .btn {
+  margin-left: auto; padding: 6px 14px; font-size: 0.82rem;
+}
+.apikey-confirm { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
+.apikey-confirm .btn { margin-left: 0; }
+
+@media (max-width: 640px) {
+  .apikey-list li > .btn, .apikey-confirm { margin-left: 0; }
+}
 .key-badge {
   font-size: 0.75rem; font-weight: 600; color: var(--green);
   background: var(--green-soft); border-radius: 999px; padding: 3px 10px;
