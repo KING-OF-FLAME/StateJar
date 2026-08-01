@@ -1,15 +1,19 @@
-# Optional ML extras for the GLiNER extraction layer.
+# Optional ML extras: the GLiNER extraction layer (EXTRACTOR_MODE=gliner) and
+# the semantic retrieval fallback (RETRIEVER_SEMANTIC=true).
 #
 # DELIBERATELY NOT in requirements.txt: Railway installs only that file, so
 # the production image stays small and the build never times out on torch.
-# Install locally when you want EXTRACTOR_MODE=gliner:
+# Install locally to enable either layer:
 #
 #     pip install -r requirements-ml.txt
 #
-# Without these packages the extractor silently stays on the rule engine.
+# Without these packages extraction silently stays on the rule engine and
+# retrieval silently stays on the keyword intent map.
 
 # CPU-only torch wheels — avoids pulling the multi-GB CUDA build.
 --extra-index-url https://download.pytorch.org/whl/cpu
 
 torch>=2.2,<3
 gliner>=0.2.13
+# all-MiniLM-L6-v2 embeddings for the retrieval fallback (~90MB model)
+sentence-transformers>=3.0

@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     # optional neural layer from requirements-ml.txt. Anything unavailable
     # degrades silently back to rules.
     extractor_mode: str = "rules"
+    # --- retrieval ---
+    # Off by default. When true (and sentence-transformers is installed) a
+    # query the keyword intent map does not recognise falls back to embedding
+    # similarity. Read path only — it cannot affect a handle.
+    retriever_semantic: bool = False
     # --- local (Ollama) models ---
     ollama_base_url: str = "http://localhost:11434"
     # Off by default so production statejar.com never advertises models that

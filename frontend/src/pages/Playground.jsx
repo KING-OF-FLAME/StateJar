@@ -975,6 +975,11 @@ export default function Playground() {
           {tab === 1 && (
             retrieved ? (
               <>
+                {retrieved.metadata.retrieval_mode && (
+                  <span className="chip chip-meta mono" title="How this subset was selected">
+                    retrieval: {retrieved.metadata.retrieval_mode}
+                  </span>
+                )}
                 <div className="pg-chips">
                   {retrieved.metadata.subset_keys.map((k) => (
                     <span className="chip mono" key={k}>{k}</span>

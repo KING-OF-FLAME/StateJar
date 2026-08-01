@@ -4,14 +4,29 @@ Given a user query and a full structured state, return only the fields
 the query actually needs (patent: minimal disclosure / token-efficient
 context injection), plus unresolved/conflict entries related to those
 fields.
+
+This is a READ path only. It never writes, never mutates the state it is
+given, and nothing it computes reaches canonicalization — so no option
+here can change a handle. That is what makes the optional semantic layer
+below safe to enable: identity is decided entirely on the write path.
+
+An optional sentence-transformers fallback can be switched on with
+RETRIEVER_SEMANTIC=true. It runs only when the keyword intent map matched
+nothing, so with it off (the default) behaviour is bit-for-bit today's.
 """
 
 from __future__ import annotations
 
 import json
+import logging
+import math
 import re
 from fnmatch import fnmatch
 from typing import Any
+
+from app.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 # Intent → keywords that trigger it and the dotted field patterns it needs.
 # Patterns support fnmatch wildcards on the leaf (e.g. "constraints.budget*").
@@ -57,6 +72,101 @@ def classify_intents(query: str) -> list[str]:
     return intents
 
 
+# --- optional semantic fallback -----------------------------------------------
+
+# How the subset was chosen, reported as `metadata.retrieval_mode`.
+MODE_INTENT = "intent_map"        # the keyword map matched — the normal path
+MODE_SEMANTIC = "semantic_fallback"  # no intent, embeddings picked the fields
+MODE_BROAD = "broad_fallback"     # no intent and nothing semantic to add
+
+SEMANTIC_MODEL_NAME = "all-MiniLM-L6-v2"
+SEMANTIC_THRESHOLD = 0.45
+SEMANTIC_TOP_K = 5
+
+# Loaded at most once per process; a failed attempt is never retried, so a
+# deployment without the ML extras costs one log line rather than a stall
+# on every query.
+_semantic_state: dict[str, Any] = {"attempted": False, "model": None}
+
+
+def _semantic_enabled() -> bool:
+    return get_settings().retriever_semantic
+
+
+def _load_semantic_model() -> Any | None:
+    """Import and load the embedding model once. Returns None on any failure."""
+    if _semantic_state["attempted"]:
+        return _semantic_state["model"]
+    _semantic_state["attempted"] = True
+    try:  # pragma: no cover - requires the optional ML extras
+        # imported here, not at module scope: torch is slow to import and is
+        # absent in production
+        from sentence_transformers import SentenceTransformer
+
+        _semantic_state["model"] = SentenceTransformer(SEMANTIC_MODEL_NAME)
+        logger.info("Semantic retrieval fallback loaded (%s)", SEMANTIC_MODEL_NAME)
+    except Exception as exc:  # noqa: BLE001 — missing extras must never crash
+        logger.warning(
+            "sentence-transformers unavailable (%s: %s) — retrieval stays on the "
+            "intent map. Install backend/requirements-ml.txt to enable it.",
+            exc.__class__.__name__,
+            exc,
+        )
+        _semantic_state["model"] = None
+    return _semantic_state["model"]
+
+
+def _render(value: Any) -> str:
+    return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    """Cosine similarity, in plain Python so mocked vectors work without numpy."""
+    dot = sum(x * y for x, y in zip(a, b))
+    norm = math.sqrt(sum(x * x for x in a)) * math.sqrt(sum(y * y for y in b))
+    return dot / norm if norm else 0.0
+
+
+def _semantic_fields(query: str, full_state: dict[str, Any]) -> list[str] | None:
+    """Dotted paths whose `path: value` text is semantically close to `query`.
+
+    Returns the top `SEMANTIC_TOP_K` above `SEMANTIC_THRESHOLD`, or None when
+    the model could not run at all (so the caller can tell "nothing matched"
+    apart from "the layer is unavailable").
+
+    Only the dict sections are embedded; unresolved/conflict entries are then
+    pulled in by the existing relatedness rule, exactly as in intent mode.
+    """
+    model = _load_semantic_model()
+    if model is None:
+        return None
+
+    candidates = [
+        (f"{section}.{key}", f"{section}.{key}: {_render(field_value)}")
+        for section, value in full_state.items()
+        if isinstance(value, dict)
+        for key, field_value in value.items()
+    ]
+    if not candidates:
+        return []
+
+    try:
+        vectors = model.encode([query] + [text for _, text in candidates])
+        query_vec = [float(x) for x in vectors[0]]
+        scored = [
+            (dotted, _cosine(query_vec, [float(x) for x in vectors[i + 1]]))
+            for i, (dotted, _) in enumerate(candidates)
+        ]
+    except Exception as exc:  # noqa: BLE001 — a bad embedding must not 500
+        logger.warning("Semantic retrieval failed (%s) — using the intent map", exc)
+        return None
+
+    hits = [(d, s) for d, s in scored if s > SEMANTIC_THRESHOLD]
+    # score first, then path, so equal scores resolve deterministically
+    hits.sort(key=lambda item: (-item[1], item[0]))
+    return [dotted for dotted, _ in hits[:SEMANTIC_TOP_K]]
+
+
 def _leaf_paths(value: Any, prefix: str = "") -> list[str]:
     """All dotted leaf paths in a nested dict (lists count as single leaves)."""
     if isinstance(value, dict) and value:
@@ -79,6 +189,17 @@ def retrieve_minimum(query: str, full_state: dict[str, Any]) -> dict[str, Any]:
     for intent in intents:
         patterns.extend(INTENT_FIELD_MAP[intent]["fields"])
 
+    # The semantic layer is a fallback, never an override: it is consulted
+    # only when the intent map found nothing, so an enabled model can never
+    # change the subset for a query that already matched.
+    mode = MODE_INTENT if intents else MODE_BROAD
+    semantic_hits: set[str] = set()
+    if not intents and _semantic_enabled():
+        matched = _semantic_fields(query, full_state)
+        if matched:
+            semantic_hits = set(matched)
+            mode = MODE_SEMANTIC
+
     subset: dict[str, Any] = {}
     subset_keys: list[str] = []
 
@@ -88,7 +209,7 @@ def retrieve_minimum(query: str, full_state: dict[str, Any]) -> dict[str, Any]:
             continue
         for key, field_value in value.items():
             dotted = f"{section}.{key}"
-            if any(fnmatch(dotted, pat) for pat in patterns):
+            if any(fnmatch(dotted, pat) for pat in patterns) or dotted in semantic_hits:
                 subset.setdefault(section, {})[key] = field_value
                 subset_keys.append(dotted)
 
@@ -122,6 +243,7 @@ def retrieve_minimum(query: str, full_state: dict[str, Any]) -> dict[str, Any]:
         "subset": subset,
         "metadata": {
             "intents": intents,
+            "retrieval_mode": mode,
             "subset_keys": subset_keys,
             "fields_dropped": fields_dropped,
             "token_estimate_saved_pct": saved_pct,
