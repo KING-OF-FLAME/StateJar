@@ -20,6 +20,10 @@ class Settings(BaseSettings):
         "https://statejar.com",
         "https://www.statejar.com",
     ]
+    # --- rate limiting ---
+    # On in production. Tests switch it off so unrelated suites are not
+    # throttled; the rate-limit tests turn it back on explicitly.
+    rate_limit_enabled: bool = True
     # --- extraction ---
     # "auto" (default) runs the GLiNER stage whenever the ML extras are
     # installed and degrades silently to the rule engine when they are not,

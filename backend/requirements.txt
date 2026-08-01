@@ -9,6 +9,7 @@ bcrypt>=3.2
 pyjwt>=2.8
 pydantic-settings>=2.3
 python-dotenv>=1.0
+slowapi>=0.1.9
 pytest>=8.2
 httpx>=0.27
 tiktoken>=0.7

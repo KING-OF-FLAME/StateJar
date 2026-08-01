@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 import jwt as pyjwt
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import select
@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.auth.models import users
 from app.auth.security import create_access_token, decode_token, hash_password, verify_password
 from app.database import get_db
+from app.security import LOGIN_LIMIT, SIGNUP_LIMIT, limiter
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -42,7 +43,10 @@ class TokenOut(BaseModel):
 
 
 @router.post("/signup", response_model=UserOut, status_code=status.HTTP_201_CREATED)
-def signup(body: SignupRequest, db: Session = Depends(get_db)) -> UserOut:
+@limiter.limit(SIGNUP_LIMIT)  # per IP: bulk account creation
+def signup(
+    request: Request, body: SignupRequest, db: Session = Depends(get_db)
+) -> UserOut:
     existing = db.execute(
         select(users.c.id).where(users.c.email == body.email)
     ).scalar_one_or_none()
@@ -61,7 +65,10 @@ def signup(body: SignupRequest, db: Session = Depends(get_db)) -> UserOut:
 
 
 @router.post("/login", response_model=TokenOut)
-def login(body: LoginRequest, db: Session = Depends(get_db)) -> TokenOut:
+@limiter.limit(LOGIN_LIMIT)  # per IP: credential stuffing
+def login(
+    request: Request, body: LoginRequest, db: Session = Depends(get_db)
+) -> TokenOut:
     row = db.execute(
         select(users).where(users.c.email == body.email)
     ).mappings().first()

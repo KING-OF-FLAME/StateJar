@@ -4,12 +4,15 @@ from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
 from app.auth.routes import router as auth_router
 from app.config import get_settings
 from app.llm.gateway import models_router
 from app.llm.gateway import router as keys_router
 from app.memory.routes import router as memory_router
+from app.security import SecurityHeadersMiddleware, limiter
 
 settings = get_settings()
 
@@ -81,6 +84,14 @@ async def _lifespan(app: FastAPI):
 
 
 app = FastAPI(title="StateJar", version="0.1.0", lifespan=_lifespan)
+
+limiter.enabled = settings.rate_limit_enabled
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# outermost middleware runs last on the way out, so these headers land on
+# every response including CORS preflights and rate-limit rejections
+app.add_middleware(SecurityHeadersMiddleware)
 
 app.add_middleware(
     CORSMiddleware,

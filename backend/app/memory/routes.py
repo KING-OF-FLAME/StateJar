@@ -6,7 +6,7 @@ import uuid
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -21,6 +21,7 @@ from app.memory.handle import generate_handle
 from app.memory.retriever import retrieve_minimum
 from app.memory.storage import MemoryStore
 from app.memory.versioning import evolve_state
+from app.security import CHAT_LIMIT, limiter, user_or_ip
 
 import json
 
@@ -135,7 +136,11 @@ def query(
 
 
 @router.post("/chat")
+# per user, not per IP: this endpoint spends the user's provider credit, and
+# an office behind one NAT must not share a single budget
+@limiter.limit(CHAT_LIMIT, key_func=user_or_ip)
 def chat(
+    request: Request,
     body: ChatRequest,
     user: UserOut = Depends(get_current_user),
     db: Session = Depends(get_db),
