@@ -190,6 +190,53 @@ _UNSURE_RE = re.compile(
 )
 
 
+# --- product/build spec patterns ----------------------------------------------
+# The other family this rule engine covers: someone briefing a coding
+# assistant. These are the constraints that get re-pasted into every prompt
+# when there is no memory, which is exactly what StateJar removes.
+
+# End of a clause: a full stop only counts when followed by space or end, so
+# "Next.js" survives while "…Tailwind. Dark theme" is cut at the sentence.
+_CLAUSE_END = r"(?=\s*(?:[.!;](?:\s|$)|,|$))"
+
+# "Stack: React + Tailwind" / "tech stack is Next.js and Postgres"
+_STACK_RE = re.compile(
+    r"\b(?:tech\s+)?stack\s*(?:is|:|=)\s*([A-Za-z0-9][\w .+/&-]*?)" + _CLAUSE_END,
+    re.IGNORECASE,
+)
+
+# "Dark theme" / "theme: light"
+_THEME_RE = re.compile(
+    r"\b(dark|light)\s+theme\b|\btheme\s*(?:is|:|=)\s*(dark|light)\b", re.IGNORECASE
+)
+
+# "brand color #E07856" / "accent colour: crimson"
+_BRAND_COLOR_RE = re.compile(
+    r"\b(?:brand|accent|primary)\s+colou?rs?\s*(?:is|to|:|=)?\s*"
+    r"(#[0-9A-Fa-f]{3,8}|[A-Za-z]+)",
+    re.IGNORECASE,
+)
+
+# "No external UI libraries" / "without any UI lib"
+_NO_UI_LIBS_RE = re.compile(
+    r"\b(?:no|without\s+(?:any\s+)?)\s*(?:external\s+)?ui\s+(?:librar(?:y|ies)|libs?)\b",
+    re.IGNORECASE,
+)
+
+# "Use shadcn/ui for the components" — the later instruction that contradicts it
+_UI_LIB_RE = re.compile(
+    r"\b(?:use|using|switch\s+to|add)\s+((?:shadcn(?:/ui)?|mui|material[-\s]?ui|chakra|"
+    r"ant\s?design|antd|bootstrap|radix|headless\s?ui|daisy\s?ui)[\w/.-]*)",
+    re.IGNORECASE,
+)
+
+# "Target audience: Indian SMB owners"
+_AUDIENCE_RE = re.compile(
+    r"\b(?:target\s+)?audience\s*(?:is|:|=)\s*([A-Za-z0-9][\w '&-]*?)" + _CLAUSE_END,
+    re.IGNORECASE,
+)
+
+
 def _slug(text: str) -> str:
     """Normalize a phrase into a snake_case field name."""
     return re.sub(r"[^a-z0-9]+", "_", text.strip().lower()).strip("_")
@@ -245,6 +292,30 @@ def _extract_rules(text: str) -> StructuredState:
     # goals
     if m := _GOAL_RE.search(text):
         state.goals["primary"] = m.group(1).strip()
+
+    # --- build spec ---
+    if m := _STACK_RE.search(text):
+        state.decisions["stack"] = m.group(1).strip()
+
+    if m := _THEME_RE.search(text):
+        state.preferences["theme"] = (m.group(1) or m.group(2)).lower()
+
+    if m := _BRAND_COLOR_RE.search(text):
+        value = m.group(1).strip()
+        # hex codes are identity-bearing; normalize case so #E07856 and
+        # #e07856 cannot mint two different handles for the same colour
+        state.preferences["brand_color"] = value.upper() if value.startswith("#") else value.lower()
+
+    # a named library wins over the blanket ban when both appear, because the
+    # specific instruction is the later intent — the contradiction is then
+    # surfaced by conflict detection rather than silently resolved here
+    if m := _UI_LIB_RE.search(text):
+        state.constraints["no_ui_libs"] = m.group(1).strip()
+    elif _NO_UI_LIBS_RE.search(text):
+        state.constraints["no_ui_libs"] = "none"
+
+    if m := _AUDIENCE_RE.search(text):
+        state.facts["audience"] = m.group(1).strip()
 
     # unresolved
     for pat, reason in ((_UNRESOLVED_RE, "not provided"), (_UNSURE_RE, "user unsure")):

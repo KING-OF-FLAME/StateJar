@@ -39,6 +39,7 @@ from app.auth.routes import UserOut, get_current_user
 from app.config import get_settings
 from app.database import get_db
 from app.llm.providers import get_provider
+from app.timeutil import iso_utc
 
 llm_metadata = MetaData()
 
@@ -309,7 +310,7 @@ def list_provider_keys(
             SavedKeyOut(
                 provider=row["provider"],
                 key_last4=decrypt_key(row["encrypted_key"])[-4:],
-                created_at=row["created_at"].isoformat(),
+                created_at=iso_utc(row["created_at"]),
             )
         )
     return out

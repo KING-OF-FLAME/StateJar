@@ -24,7 +24,10 @@ from sqlalchemy import (
 )
 from sqlalchemy.engine import Engine
 
+from app.memory.canonicalizer import NORM_VERSION, SCHEMA_VERSION, canonicalize
+from app.memory.handle import generate_handle
 from app.memory.storage import MemoryStore
+from app.timeutil import iso_utc
 
 audit_metadata = MetaData()
 
@@ -136,20 +139,32 @@ class AuditLogger:
         with self._engine.connect() as conn:
             return [dict(r) for r in conn.execute(stmt).mappings()]
 
-    def replay(self, request_id: str) -> dict[str, Any] | None:
+    def replay(self, request_id: str, user_id: int | None = None) -> dict[str, Any] | None:
         """Reconstruct exactly which handle + subset was used for a request.
 
         Fetches the state by its handle and re-applies subset_keys to
         rebuild the disclosed subset. Returns None if the request or its
         state is unknown.
+
+        `user_id` scopes both lookups to one account. Always pass it when the
+        request_id came from outside the process — an audit entry is a record
+        of what was disclosed, so replaying someone else's would disclose it
+        again.
+
+        The result carries `verified`: the state is re-canonicalized and
+        re-hashed, and the digest compared with the handle recorded at the
+        time. Because the handle is a content address, a match proves the
+        stored bytes have not changed since the response was logged.
         """
         stmt = select(audit_logs).where(audit_logs.c.request_id == request_id)
+        if user_id is not None:
+            stmt = stmt.where(audit_logs.c.user_id == user_id)
         with self._engine.connect() as conn:
             entry = conn.execute(stmt).mappings().first()
         if entry is None or not entry["handle_used"]:
             return None
 
-        row = self._store.get_state(entry["handle_used"])
+        row = self._store.get_state(entry["handle_used"], user_id=user_id)
         if row is None:
             return None
         state: dict[str, Any] = row["state_json"]
@@ -168,13 +183,25 @@ class AuditLogger:
                 if matches:
                     subset.setdefault(section, []).extend(matches)
 
+        # content-addressed: re-deriving the handle from the stored state is a
+        # byte-level integrity check, not a formality
+        canonical = canonicalize(state)
+        recomputed = generate_handle(
+            canonical, entry["schema_version"] or SCHEMA_VERSION,
+            entry["norm_version"] or NORM_VERSION,
+        )
+
         return {
             "request_id": request_id,
             "handle_used": entry["handle_used"],
+            "recomputed_handle": recomputed,
+            "verified": recomputed == entry["handle_used"],
             "subset_keys": entry["subset_keys"],
             "subset": subset,
+            "canonical": canonical,
             "provider": entry["provider"],
             "model": entry["model"],
             "schema_version": entry["schema_version"],
             "norm_version": entry["norm_version"],
+            "created_at": iso_utc(entry["created_at"]),
         }

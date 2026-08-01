@@ -23,6 +23,7 @@ from app.memory.retriever import retrieve_minimum
 from app.memory.storage import MemoryStore
 from app.memory.versioning import evolve_state
 from app.security import CHAT_LIMIT, limiter, user_or_ip
+from app.timeutil import iso_utc
 
 import json
 
@@ -267,7 +268,7 @@ def stats(
             {
                 "handle": r["handle"],
                 "session_tag": r["session_tag"],
-                "created_at": r["created_at"].isoformat(),
+                "created_at": iso_utc(r["created_at"]),
             }
             for r in latest
         ],
@@ -289,7 +290,7 @@ def state_by_handle(
         "parent_handle": row["parent_handle"],
         "state": row["state_json"],
         "session_tag": row["session_tag"],
-        "created_at": row["created_at"].isoformat(),
+        "created_at": iso_utc(row["created_at"]),
     }
 
 
@@ -302,6 +303,24 @@ def versions(
     return {"session_tag": session_tag, "versions": _store(db).list_versions(user.id, session_tag)}
 
 
+@router.get("/audit/{request_id}/replay")
+def audit_replay(
+    request_id: str,
+    user: UserOut = Depends(get_api_caller),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Reconstruct exactly what was disclosed for one audited response.
+
+    `verified` re-derives the handle from the stored state: because the
+    handle is a SHA-256 content address, a match proves the bytes behind
+    that answer are unchanged since it was logged.
+    """
+    replayed = _audit(db).replay(request_id, user_id=user.id)
+    if replayed is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown request id")
+    return replayed
+
+
 @router.get("/audit")
 def audit_trail(
     limit: int = 50,
@@ -311,7 +330,7 @@ def audit_trail(
 ) -> dict[str, Any]:
     entries = _audit(db).get_audit_trail(user.id, limit=limit, session_tag=session_tag)
     for e in entries:
-        e["created_at"] = e["created_at"].isoformat()
+        e["created_at"] = iso_utc(e["created_at"])
     return {"entries": entries}
 
 

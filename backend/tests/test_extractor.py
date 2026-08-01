@@ -52,3 +52,52 @@ def test_empty_text_returns_empty_state() -> None:
     assert state.goals == {}
     assert state.unresolved == []
     assert state.conflicts == []
+
+
+# --- build-spec extraction (the demo's developer scenario) --------------------
+
+BRIEF = (
+    "Build me a landing page. Stack: React + Tailwind. Dark theme, "
+    "brand color #E07856. No external UI libraries. "
+    "Target audience: Indian SMB owners."
+)
+
+
+def test_build_brief_extracts_every_spec_field() -> None:
+    state = extract_state(BRIEF)
+    assert state.decisions["stack"] == "React + Tailwind"
+    assert state.preferences["theme"] == "dark"
+    assert state.preferences["brand_color"] == "#E07856"
+    assert state.constraints["no_ui_libs"] == "none"
+    assert state.facts["audience"] == "Indian SMB owners"
+
+
+def test_hex_colour_case_is_normalized() -> None:
+    """#e07856 and #E07856 are the same colour and must not mint two handles."""
+    assert extract_state("brand color #e07856").preferences["brand_color"] == "#E07856"
+    assert extract_state("brand color #E07856").preferences["brand_color"] == "#E07856"
+
+
+def test_named_library_overrides_the_blanket_ban() -> None:
+    """The later, specific instruction wins; the contradiction surfaces as a conflict."""
+    assert extract_state("Use shadcn/ui for the components.").constraints[
+        "no_ui_libs"] == "shadcn/ui"
+    assert extract_state("No external UI libraries.").constraints["no_ui_libs"] == "none"
+    # both present: the named library is what the user actually asked for
+    both = extract_state("No external UI libraries. Use shadcn/ui for the components.")
+    assert both.constraints["no_ui_libs"] == "shadcn/ui"
+
+
+def test_theme_and_stack_phrasings() -> None:
+    assert extract_state("theme: light").preferences["theme"] == "light"
+    assert extract_state("tech stack is Next.js and Postgres").decisions[
+        "stack"] == "Next.js and Postgres"
+
+
+def test_build_brief_does_not_disturb_the_older_rules() -> None:
+    """The new family must not fire on, or break, the original patterns."""
+    old = extract_state("My name is Ayaan, budget under ₹2000. I prefer email.")
+    assert old.facts == {"name": "Ayaan"}
+    assert old.preferences == {"contact_mode": "email"}
+    assert old.constraints == {"budget_inr_max": 2000}
+    assert old.decisions == {}

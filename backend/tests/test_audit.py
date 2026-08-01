@@ -1,10 +1,16 @@
 """Tests for AuditLogger: logging, trail, replay, and secret scrubbing."""
 
+import json
+
 import pytest
 from sqlalchemy import create_engine
 
 from app.memory.audit import AuditLogger, SecretInAuditError, audit_metadata
+from app.memory.canonicalizer import NORM_VERSION, SCHEMA_VERSION, canonicalize
+from app.memory.extractor import extract_state
+from app.memory.handle import generate_handle
 from app.memory.storage import MemoryStore, metadata as storage_metadata
+from app.timeutil import iso_utc
 
 STATE = {
     "facts": {"name": "Ayaan"},
@@ -98,3 +104,79 @@ def test_secret_like_values_refused(logger: AuditLogger) -> None:
     with pytest.raises(SecretInAuditError):
         _log(logger, model="Bearer eyJhbGciOi")
     assert logger.get_audit_trail(user_id=1) == []
+
+
+# --- provenance replay over HTTP ---------------------------------------------
+
+
+def test_replay_verifies_the_handle() -> None:
+    """A content-addressed handle makes replay a real integrity check."""
+    engine = create_engine("sqlite:///:memory:")
+    storage_metadata.create_all(engine)
+    audit_metadata.create_all(engine)
+    store = MemoryStore(engine)
+    logger = AuditLogger(engine, store)
+
+    state = extract_state(
+        "Stack: React + Tailwind. Dark theme, brand color #E07856."
+    ).model_dump()
+    canonical = canonicalize(state)
+    handle = generate_handle(canonical, SCHEMA_VERSION, NORM_VERSION)
+    store.save_state(handle, None, json.loads(canonical), SCHEMA_VERSION, NORM_VERSION,
+                     user_id=1, session_tag="s1")
+    logger.log_response(
+        request_id="req-1", user_id=1, handle_used=handle,
+        subset_keys=["decisions.stack", "preferences.brand_color"],
+        provider="demo", model="scripted-demo",
+        schema_version=SCHEMA_VERSION, norm_version=NORM_VERSION, session_tag="s1",
+    )
+
+    out = logger.replay("req-1", user_id=1)
+    assert out is not None
+    assert out["verified"] is True
+    assert out["recomputed_handle"] == handle
+    assert out["subset"] == {
+        "decisions": {"stack": "React + Tailwind"},
+        "preferences": {"brand_color": "#E07856"},
+    }
+    # only the logged keys are reconstructed — theme was never disclosed
+    assert "theme" not in out["subset"].get("preferences", {})
+
+
+def test_replay_is_scoped_to_the_owner() -> None:
+    """An audit row records a disclosure; replaying another user's would repeat it."""
+    engine = create_engine("sqlite:///:memory:")
+    storage_metadata.create_all(engine)
+    audit_metadata.create_all(engine)
+    store = MemoryStore(engine)
+    logger = AuditLogger(engine, store)
+
+    state = extract_state("Stack: React + Tailwind.").model_dump()
+    canonical = canonicalize(state)
+    handle = generate_handle(canonical, SCHEMA_VERSION, NORM_VERSION)
+    store.save_state(handle, None, json.loads(canonical), SCHEMA_VERSION, NORM_VERSION,
+                     user_id=1, session_tag="s1")
+    logger.log_response(
+        request_id="req-1", user_id=1, handle_used=handle, subset_keys=["decisions.stack"],
+        provider="demo", model="m", schema_version=SCHEMA_VERSION,
+        norm_version=NORM_VERSION, session_tag="s1",
+    )
+
+    assert logger.replay("req-1", user_id=1) is not None
+    assert logger.replay("req-1", user_id=2) is None      # not yours
+    assert logger.replay("nope", user_id=1) is None
+
+
+def test_timestamps_carry_an_explicit_utc_offset(logger: AuditLogger) -> None:
+    """A bare ISO string is read as local time by browsers, skewing every
+    'x minutes ago' by the viewer's offset."""
+    from datetime import datetime, timezone
+
+    _log(logger, "req-1")
+    created = logger.get_audit_trail(user_id=1)[0]["created_at"]
+    assert iso_utc(created).endswith("+00:00")
+    # round-trips to an aware datetime, so no client has to guess
+    assert datetime.fromisoformat(iso_utc(created)).tzinfo is not None
+    assert iso_utc(None) is None
+    aware = datetime(2026, 8, 1, 16, 29, tzinfo=timezone.utc)
+    assert iso_utc(aware) == iso_utc(aware.replace(tzinfo=None))

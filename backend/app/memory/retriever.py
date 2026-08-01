@@ -56,6 +56,23 @@ INTENT_FIELD_MAP: dict[str, dict[str, list[str]]] = {
         "keywords": ["goal", "plan", "objective", "want"],
         "fields": ["goals.*"],
     },
+    # Briefing a coding assistant: a follow-up like "now add a pricing
+    # section" needs the build spec and nothing else — not the audience, and
+    # certainly not the earlier transcript.
+    "build": {
+        "keywords": [
+            "add", "build", "create", "implement", "page", "section",
+            "component", "layout", "style", "design", "screen", "form",
+        ],
+        "fields": [
+            "decisions.stack",
+            "preferences.theme",
+            "preferences.brand_color",
+            "constraints.no_ui_libs",
+            "unresolved.stack*",
+            "conflicts.constraints*",
+        ],
+    },
 }
 
 

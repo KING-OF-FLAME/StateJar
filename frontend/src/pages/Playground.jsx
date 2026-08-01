@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api.js'
+import AuditTimeline from '../components/AuditTimeline.jsx'
+import Pipeline, { canonicalPreview, countFields, usePipeline } from '../components/Pipeline.jsx'
 
 /* Fallback catalog shown until GET /models answers (the backend serves the
    live free list from OpenRouter; stale hardcoded IDs 404 with
@@ -32,40 +34,76 @@ const TABS = ['Memory State', 'Retrieved Context', 'Handles', 'Audit']
    pipeline (extraction, handles, minimal retrieval, audit) runs live, but
    no LLM chat endpoint and no provider key are ever involved, so the demo
    works identically on a brand-new account with zero keys saved. */
-const DEMO_MSGS = [
-  'My name is Ayaan, I prefer email, budget ₹2000',
-  'Book my delivery with my usual preferences',
-  'Budget is now ₹2500',
-]
+const DEMO_MSGS = {
+  brief:
+    'Build me a landing page. Stack: React + Tailwind. Dark theme, ' +
+    'brand color #E07856. No external UI libraries. ' +
+    'Target audience: Indian SMB owners.',
+  followUp: 'Now add a pricing section.',
+  recolor: 'Actually make the brand color #6B9080.',
+  uiLib: 'Use shadcn/ui for the components.',
+}
 
-const DEMO_REPLIES = [
-  "Got it, Ayaan! I've noted your email preference and ₹2000 budget.",
-  "Booking with your saved preferences — I'll email you the confirmation " +
-    'and keep it under ₹2000. Only your delivery time is pending: when ' +
-    'should it arrive?',
-  "Updated — your budget is now ₹2500. The earlier ₹2000 isn't " +
-    "overwritten: it's preserved in your version history, and this " +
-    'disclosure was logged in the audit trail.',
-]
+const DEMO_REPLIES = {
+  scaffold: 'Landing page scaffolded — React + Tailwind, dark theme, #E07856 accents.',
+  pricing:
+    'Pricing section added — same React + Tailwind, dark, #E07856, ' +
+    'no external UI libraries.',
+  recolor:
+    'Updated to #6B9080. The previous value is preserved in history, ' +
+    'not overwritten.',
+  uiLib:
+    "Noted — that contradicts your earlier 'no external UI libraries' " +
+    "constraint. I've kept both, flagged as a conflict.",
+  audit:
+    'Every answer above is replayable — handle, exact fields used, ' +
+    'model, timestamp.',
+}
 
 const DEMO_STEP_LABELS = [
-  'extracting structured state…',
-  'minting handle & logging audit…',
-  'retrieving minimal subset cross-session…',
-  'replying from memory, not transcript…',
+  'extracting the build spec…',
+  'counting what a transcript would cost…',
+  'new session — retrieving the minimum…',
   'evolving state, preserving history…',
+  'recording the contradiction…',
   'writing the audit trail…',
 ]
 
 /* Presenter captions: spoken-friendly step names for the stage caption bar. */
 const PRESENTER_CAPTIONS = [
-  'Extraction: raw words become structured state',
-  'Sealing: SHA-256 handle minted, disclosure audited',
-  'New session: retrieving the minimum',
-  'Answering from memory — the transcript was never stored',
-  'Budget revised: history preserved, conflict recorded',
-  'The audit trail: proof of exactly what was disclosed',
+  'The brief: five constraints become structured state',
+  'The cost of repeating yourself, turn after turn',
+  'Next day, new chat — it never saw the first conversation',
+  'Colour revised: a new handle, the old one still intact',
+  'A contradiction: both values kept, neither overwritten',
+  'Provenance: every answer replayable, field by field',
 ]
+
+/* Beat 2 of the demo: the argument, not an API call. The numbers describe
+   what transcript-replay costs by turn 10 when the spec must be re-pasted
+   every time — the contrast the live retrieval then demonstrates for real. */
+function CompareCard() {
+  return (
+    <div className="cmp" role="figure" aria-label="Context cost with and without StateJar">
+      <div className="cmp-col cmp-without">
+        <h4>Without StateJar</h4>
+        <ul>
+          <li>Re-paste the whole spec into every new prompt</li>
+          <li>Context grows with each turn</li>
+          <li className="cmp-figure">~4,100 tokens by turn 10</li>
+        </ul>
+      </div>
+      <div className="cmp-col cmp-with">
+        <h4>With StateJar</h4>
+        <ul>
+          <li>The spec lives in the jar, addressed by handle</li>
+          <li>Each prompt sends only the fields it needs</li>
+          <li className="cmp-figure">only what this turn requires</li>
+        </ul>
+      </div>
+    </div>
+  )
+}
 
 /* Eases a displayed number toward `value` (for the live tokens-saved card). */
 function EasedNumber({ value }) {
@@ -90,6 +128,10 @@ function EasedNumber({ value }) {
 /* Hard ceiling on any single demo step's network work: past this the beat
    degrades to its scripted reply rather than sitting on a spinner. */
 const DEMO_STEP_TIMEOUT_MS = 6000
+
+/* Unattended pacing: six beats at roughly five seconds each is the ~30s
+   story. Presenter mode ignores this entirely and waits for Space. */
+const DEMO_BEAT_PACE_MS = 4400
 
 const fmtTime = (ts) =>
   new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -303,6 +345,9 @@ export default function Playground() {
   const [versions, setVersions] = useState([])
   const [inspected, setInspected] = useState(null)  // old state being inspected
   const [audit, setAudit] = useState([])
+  const [newAuditId, setNewAuditId] = useState(null)   // newest row, highlighted after a demo
+  const [demoSummary, setDemoSummary] = useState(null) // {turns, savedPct} once a run finishes
+  const pipe = usePipeline()
   const [pulse, setPulse] = useState(0)             // animation trigger
   const [searchParams, setSearchParams] = useSearchParams()
   const [presenter, setPresenter] = useState(() => searchParams.has('presenter'))
@@ -465,26 +510,34 @@ export default function Playground() {
     setInput('')
     setBusy(true)
     addMsg({ role: 'user', content: text })
+    pipe.reset()
     try {
       // 1. ingest — extraction + canonicalization + handle + storage
-      const ing = await api('/memory/ingest', {
-        method: 'POST',
-        body: { session_tag: session, text },
-      })
-      applyIngest(ing)
+      const ing = await runIngest(session, text)
 
       // 2. retrieve minimum for this text as a query
+      pipe.begin('retrieve')
       const q = await api('/memory/query', {
         method: 'POST',
         body: { session_tag: session, query: text },
       })
       setRetrieved(q)
+      const keys = q.metadata.subset_keys || []
+      pipe.complete([['retrieve', {
+        badge: `${keys.length} of ${keys.length + (q.metadata.fields_dropped || 0)} fields`,
+        payload: { subset_keys: keys, subset: q.subset },
+      }]])
 
       // 3. chat via the user's provider key
       const payload = { session_tag: session, query: text, model: effectiveModel }
       try {
         const c = await chatWithRetry(payload)
         addMsg({ role: 'assistant', content: c.response })
+        // the audit row exists only once a response was actually served
+        pipe.complete([['audit', {
+          badge: 'logged',
+          payload: { audit_id: c.audit_id, subset_keys: c.subset_keys },
+        }]])
       } catch (err) {
         flagIfModelGone(err)
         addMsg({ role: 'assistant', error: true, content: err.message, payload })
@@ -540,59 +593,137 @@ export default function Playground() {
      always cleared and the scripted reply is always rendered — so a slow
      or failed backend degrades the demo instead of freezing it. */
 
+  /* One ingest, tracked through the pipeline strip from the real response.
+     Shared by the demo and by ordinary sends, so the strip means the same
+     thing either way. Declared here but only ever called after render. */
+  const runIngest = async (tag, text) => {
+    pipe.begin('ingest')
+    const ing = await api('/memory/ingest', {
+      method: 'POST', body: { session_tag: tag, text },
+    })
+    applyIngest(ing)
+    pipe.complete([
+      ['ingest', { badge: 'sent', payload: text }],
+      ['extract', {
+        badge: `${countFields(ing.state)} fields`,
+        payload: ing.state,
+      }],
+      ['canonicalize', {
+        badge: 'sorted',
+        payload: canonicalPreview(ing.state),
+      }],
+      ['handle', {
+        badge: ing.handle.replace('shm_', '').slice(0, 8),
+        payload: ing.handle,
+      }],
+      ['store', {
+        badge: ing.parent_handle ? 'v+1' : 'v1',
+        payload: {
+          session_tag: tag,
+          parent_handle: ing.parent_handle,
+          conflicts: ing.conflicts || [],
+        },
+      }],
+    ])
+    return ing
+  }
+
   const demoSteps = [
+    // 1 — the brief. Five constraints a developer would otherwise re-paste.
     {
-      before: (c) => { addMsg({ role: 'user', demo: true, content: DEMO_MSGS[0] }); focusTab(0) },
+      before: () => {
+        addMsg({ role: 'user', demo: true, content: DEMO_MSGS.brief })
+        focusTab(0)
+      },
       work: async (c) => {
-        const ing = await api('/memory/ingest', {
-          method: 'POST', body: { session_tag: c.tagA, text: DEMO_MSGS[0] },
-        })
-        applyIngest(ing)
+        await runIngest(c.tagA, DEMO_MSGS.brief)
         await refreshVersions(c.tagA)
       },
+      reply: DEMO_REPLIES.scaffold,
     },
+    // 2 — the pain, side by side. No API call: this beat is the argument.
     {
-      work: async (c) => {
-        await demoQuery(c.tagA, DEMO_MSGS[0])
-        await fetchAudit(c.tagA, auditScope)
+      before: () => {
+        addMsg({ role: 'compare', demo: true })
+        addMsg({
+          role: 'note', demo: true,
+          content: 'Same conversation. One of them pays for the context twice.',
+        })
       },
-      reply: DEMO_REPLIES[0],
     },
+    // 3 — the money shot: a brand-new session that still knows the spec.
     {
       before: (c) => {
         switchSession(c.tagB, { keep: true })
-        addMsg({ role: 'user', demo: true, content: DEMO_MSGS[1] })
+        addMsg({ role: 'user', demo: true, content: DEMO_MSGS.followUp })
       },
       work: async (c) => {
-        const q = await demoQuery(c.tagB, DEMO_MSGS[1])
+        pipe.begin('retrieve')
+        const q = await demoQuery(c.tagB, DEMO_MSGS.followUp)
         setRetrieved(q)
+        const keys = q.metadata.subset_keys || []
+        const total = keys.length + (q.metadata.fields_dropped || 0)
+        pipe.complete([
+          ['retrieve', {
+            badge: `${keys.length} of ${total} fields`,
+            payload: { subset_keys: keys, subset: q.subset },
+          }],
+          ...(q.audit_id
+            ? [['audit', { badge: 'logged', payload: { audit_id: q.audit_id } }]]
+            : []),
+        ])
         focusTab(1)
         setPulse((p) => p + 1)
       },
+      reply: DEMO_REPLIES.pricing,
+      note: "It never saw the first conversation. It didn't need to.",
     },
-    { reply: DEMO_REPLIES[1] },
+    // 4 — versioning: a new handle, the previous one still lit.
     {
       before: (c) => {
         switchSession(c.tagA, { keep: true })
-        addMsg({ role: 'user', demo: true, content: DEMO_MSGS[2] })
+        addMsg({ role: 'user', demo: true, content: DEMO_MSGS.recolor })
       },
       work: async (c) => {
-        const ing = await api('/memory/ingest', {
-          method: 'POST', body: { session_tag: c.tagA, text: DEMO_MSGS[2] },
-        })
-        applyIngest(ing)
+        await runIngest(c.tagA, DEMO_MSGS.recolor)
         await refreshVersions(c.tagA)
         focusTab(2)
       },
+      reply: DEMO_REPLIES.recolor,
     },
+    // 5 — conflict preservation: both values kept, contradiction recorded.
+    {
+      before: () => {
+        addMsg({ role: 'user', demo: true, content: DEMO_MSGS.uiLib })
+      },
+      work: async (c) => {
+        await runIngest(c.tagA, DEMO_MSGS.uiLib)
+        await refreshVersions(c.tagA)
+        focusTab(0)
+        setPulse((p) => p + 1)
+      },
+      reply: DEMO_REPLIES.uiLib,
+    },
+    // 6 — provenance.
     {
       work: async (c) => {
-        await demoQuery(c.tagA, DEMO_MSGS[2])
+        pipe.begin('retrieve')
+        const q = await demoQuery(c.tagA, DEMO_MSGS.followUp)
+        const keys = q.metadata.subset_keys || []
+        const total = keys.length + (q.metadata.fields_dropped || 0)
+        pipe.complete([
+          ['retrieve', {
+            badge: `${keys.length} of ${total} fields`,
+            payload: { subset_keys: keys, subset: q.subset },
+          }],
+          ['audit', { badge: 'logged', payload: { audit_id: q.audit_id } }],
+        ])
+        setNewAuditId(q.audit_id || null)
         await fetchAudit(c.tagA, auditScope)
         focusTab(3)
         setPulse((p) => p + 1)
       },
-      reply: DEMO_REPLIES[2],
+      reply: DEMO_REPLIES.audit,
     },
   ]
 
@@ -642,6 +773,7 @@ export default function Playground() {
       if (demoCtxRef.current?.runId === ctx.runId) {
         setTyping(false)
         if (step.reply) addMsg({ role: 'assistant', demo: true, content: step.reply })
+        if (step.note) addMsg({ role: 'note', demo: true, content: step.note })
       }
     }
   }
@@ -658,6 +790,17 @@ export default function Playground() {
     demoCtxRef.current = null
     setDemoRunning(false)
     setDemoStep(0)
+    // real measured average across this run's audited retrievals; stays null
+    // (and the chip stays hidden) if no query ever reported a percentage
+    const saved = demoSavedRef.current
+    setDemoSummary(
+      saved.length
+        ? {
+            turns: 6,
+            savedPct: Math.round((saved.reduce((a, b) => a + b, 0) / saved.length) * 10) / 10,
+          }
+        : null,
+    )
   }
 
   /* Drives one beat, then hands control back: the presenter advances with
@@ -679,7 +822,7 @@ export default function Playground() {
     }
     if (!presenterRef.current) {
       clearAutoAdvance()
-      autoTimerRef.current = setTimeout(() => advanceDemo(), 1200)
+      autoTimerRef.current = setTimeout(() => advanceDemo(), DEMO_BEAT_PACE_MS)
     }
   }
 
@@ -710,6 +853,9 @@ export default function Playground() {
     demoCtxRef.current = { runId, tagA, tagB, idx: -1, busy: false, pendingAdvance: false }
     demoSavedRef.current = []
     setPresenterSaved(null)
+    setDemoSummary(null)
+    setNewAuditId(null)
+    pipe.reset()
     setInput('')
     setDemoRunning(true)
     // stray focus must never swallow the presenter's Space key
@@ -834,6 +980,9 @@ export default function Playground() {
           </span>
         </div>
       )}
+      <Pipeline stages={pipe.stages} travelling={pipe.travelling} />
+
+      <div className="pg-cols">
       <div className="pg-chat" ref={chatRef}>
         <div className="pg-toolbar">
           <button className="btn btn-primary pg-mini demo-btn" onClick={startDemo} disabled={locked}>
@@ -890,30 +1039,46 @@ export default function Playground() {
                 ▶ Run instant demo
               </button>
               <p className="mono">// no API key needed — watch the memory pipeline run live</p>
-              <p>or say: "My name is Ayaan, I prefer email, budget ₹2000"</p>
-              <p>then switch to a new session and ask: "Book my delivery"</p>
+              <p>or brief it yourself: "Stack: React + Tailwind. Dark theme, brand color #E07856."</p>
+              <p>then switch to a new session and ask: "Now add a pricing section."</p>
             </div>
           )}
-          {messages.map((m, i) => (
-            <div key={i} className={`pg-msg ${m.role}`}>
-              <span className="pg-role">
-                {m.role === 'user' ? 'you' : 'assistant'}
-                {m.demo && <span className="chip-demo">demo</span>}
-                <span className="pg-time">{fmtTime(m.ts)}</span>
-              </span>
-              <div className={`pg-bubble${m.error ? ' pg-error' : ''}`}>
-                {m.content}
-                {m.error && m.payload && (
-                  <button
-                    className="retry-btn" disabled={locked}
-                    onClick={() => retryChat(i, m.payload)}
-                  >
-                    ↻ Retry
-                  </button>
-                )}
+          {messages.map((m, i) => {
+            if (m.role === 'compare') return <CompareCard key={i} />
+            if (m.role === 'note') {
+              return <p className="pg-note" key={i}>{m.content}</p>
+            }
+            return (
+              <div key={i} className={`pg-msg ${m.role}`}>
+                <span className="pg-role">
+                  {m.role === 'user' ? 'you' : 'assistant'}
+                  {m.demo && <span className="chip-demo">demo</span>}
+                  <span className="pg-time">{fmtTime(m.ts)}</span>
+                </span>
+                <div className={`pg-bubble${m.error ? ' pg-error' : ''}`}>
+                  {m.content}
+                  {m.error && m.payload && (
+                    <button
+                      className="retry-btn" disabled={locked}
+                      onClick={() => retryChat(i, m.payload)}
+                    >
+                      ↻ Retry
+                    </button>
+                  )}
+                </div>
               </div>
+            )
+          })}
+          {demoSummary && (
+            <div className="demo-summary" role="status">
+              <span className="demo-summary-num">{demoSummary.turns} turns</span>
+              <span className="demo-summary-sep">·</span>
+              <span className="demo-summary-num accent">
+                {demoSummary.savedPct}% fewer prompt tokens
+              </span>
+              <span className="demo-summary-note">measured from this run's retrievals</span>
             </div>
-          ))}
+          )}
           {(busy || typing) && (
             <div className="pg-msg assistant"><div className="pg-bubble pg-typing">···</div></div>
           )}
@@ -1027,47 +1192,16 @@ export default function Playground() {
           )}
 
           {tab === 3 && (
-            <>
-              <div className="audit-scope" role="group" aria-label="Audit scope">
-                <button
-                  className={auditScope === 'session' ? 'active' : ''}
-                  onClick={() => setAuditScope('session')}
-                >
-                  This session
-                </button>
-                <button
-                  className={auditScope === 'all' ? 'active' : ''}
-                  onClick={() => setAuditScope('all')}
-                >
-                  All sessions
-                </button>
-              </div>
-              {audit.length ? (
-                <div className="audit-list">
-                  {audit.map((a) => (
-                    <div className="audit-row" key={a.request_id}>
-                      <div className="mono audit-id">{a.request_id.slice(0, 12)}…</div>
-                      <div className="mono audit-handle">{a.handle_used?.slice(0, 22)}…</div>
-                      <div className="pg-chips">
-                        {(a.subset_keys || []).map((k) => <span className="chip mono" key={k}>{k}</span>)}
-                      </div>
-                      <div className="audit-meta">
-                        {auditScope === 'all' && a.session_tag ? `${a.session_tag} · ` : ''}
-                        {a.provider} · {a.model} · {new Date(a.created_at).toLocaleTimeString()}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="empty-note">
-                  {auditScope === 'session'
-                    ? 'No audited responses in this session yet — every chat logs exactly what was disclosed.'
-                    : 'No audited responses yet — every chat logs exactly what was disclosed.'}
-                </p>
-              )}
-            </>
+            <AuditTimeline
+              entries={audit}
+              scope={auditScope}
+              onScope={setAuditScope}
+              onCopyHandle={copyHandle}
+              highlightId={newAuditId}
+            />
           )}
         </div>
+      </div>
       </div>
     </div>
   )

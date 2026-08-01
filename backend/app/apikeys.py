@@ -40,6 +40,7 @@ from sqlalchemy.orm import Session
 from app.auth.models import users
 from app.auth.routes import UserOut, get_current_user, user_from_bearer
 from app.database import get_db
+from app.timeutil import iso_utc
 
 apikeys_metadata = MetaData()
 
@@ -144,7 +145,7 @@ def generate_api_key(
         id=result.inserted_primary_key[0],
         api_key=key,
         key_last4=key[-4:],
-        created_at=created_at.isoformat(),
+        created_at=iso_utc(created_at),
     )
 
 
@@ -162,7 +163,7 @@ def list_api_keys(
     ).mappings()
     return [
         ApiKeyOut(
-            id=r["id"], key_last4=r["key_last4"], created_at=r["created_at"].isoformat()
+            id=r["id"], key_last4=r["key_last4"], created_at=iso_utc(r["created_at"])
         )
         for r in rows
     ]
