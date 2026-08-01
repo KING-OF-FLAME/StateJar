@@ -325,7 +325,10 @@ export default function Landing() {
       <header className="hero">
         <div className="container">
           <span className="hero-badge fade-item">Indian Patent No. 202621017626</span>
-          <h1 className="fade-item" style={{ '--d': '80ms' }}>
+          {/* No entrance animation: this headline is the LCP element, and
+              fading it in delays the page's largest paint by the whole
+              animation. Everything around it still fades. */}
+          <h1>
             Deterministic memory for AI that never forgets — <em>or hallucinates its past.</em>
           </h1>
           <p className="hero-sub fade-item" style={{ '--d': '160ms' }}>
