@@ -623,6 +623,7 @@ footer {
 .json-tree { font-size: 0.78rem; line-height: 1.9; overflow-wrap: anywhere; }
 .jt-key { color: var(--ink); font-weight: 500; }
 .jt-key::after { content: ':'; color: var(--ink-faint); }
+.jt-bullet { color: var(--ink-faint); }
 .jt-str { color: var(--green); }
 .jt-num { color: var(--accent); }
 .jt-dim { color: var(--ink-faint); }

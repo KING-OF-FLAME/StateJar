@@ -135,9 +135,12 @@ function JsonNode({ k, value, depth = 0, coral = false, path = '', changed }) {
     )
   }
   const isChanged = changed?.has(path)
+  // a numeric key means this is an item in a list (e.g. constraints.requirements);
+  // a bullet reads better than "0:" for a collected value
+  const isListItem = typeof k === 'number'
   return (
     <div style={pad} className={`${coral ? 'jt-coral' : ''}${isChanged ? ' jt-changed' : ''}`}>
-      <span className="jt-key">{k}</span>{' '}
+      <span className={isListItem ? 'jt-bullet' : 'jt-key'}>{isListItem ? '–' : k}</span>{' '}
       <span className={typeof value === 'number' ? 'jt-num' : 'jt-str'}>{JSON.stringify(value)}</span>
     </div>
   )

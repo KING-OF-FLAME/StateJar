@@ -20,7 +20,9 @@ def detect_conflicts(
     """Return conflict records for fields whose value changes.
 
     Each record: {"field": "section.key", "old": ..., "new": ..., "timestamp": ISO}.
-    Fields that are new (absent in old_state) are not conflicts.
+    Fields that are new (absent in old_state) are not conflicts, and neither
+    are list-valued fields: those accumulate (see versioning._merge_field), so
+    a longer list is more information, not a contradiction.
     """
     now = datetime.now(timezone.utc).isoformat()
     conflicts: list[dict[str, Any]] = []
@@ -28,7 +30,11 @@ def detect_conflicts(
         old_section = old_state.get(section) or {}
         new_section = new_extracted.get(section) or {}
         for key, new_value in new_section.items():
-            if key in old_section and old_section[key] != new_value:
+            if key not in old_section:
+                continue
+            if isinstance(old_section[key], list) and isinstance(new_value, list):
+                continue
+            if old_section[key] != new_value:
                 conflicts.append(
                     {
                         "field": f"{section}.{key}",

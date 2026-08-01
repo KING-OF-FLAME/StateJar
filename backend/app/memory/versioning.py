@@ -16,14 +16,36 @@ from app.memory.conflict import _TRACKED_SECTIONS, detect_conflicts
 from app.memory.handle import generate_handle
 
 
+def _item_key(value: Any) -> str:
+    """Total order over arbitrary JSON values, for deterministic list unions."""
+    return json.dumps(value, sort_keys=True, ensure_ascii=False, default=str)
+
+
+def _merge_field(old_value: Any, new_value: Any) -> Any:
+    """New value wins, except list-valued fields, which accumulate.
+
+    A list means the field collects rather than replaces (e.g. the
+    requirements the extractor gathers): a later message mentioning one more
+    requirement must not drop the ones already known. The union is sorted so
+    the canonical bytes never depend on the order messages arrived in.
+    """
+    if isinstance(old_value, list) and isinstance(new_value, list):
+        union = list(old_value) + [v for v in new_value if v not in old_value]
+        return sorted(union, key=_item_key)
+    return copy.deepcopy(new_value)
+
+
 def _merge(old_state: dict[str, Any], new_extracted: dict[str, Any]) -> dict[str, Any]:
     """Merge new info over the old state (new values win); pure function."""
     merged = copy.deepcopy(old_state)
 
     for section in _TRACKED_SECTIONS:
         new_section = new_extracted.get(section) or {}
-        if new_section:
-            merged.setdefault(section, {}).update(copy.deepcopy(new_section))
+        if not new_section:
+            continue
+        target = merged.setdefault(section, {})
+        for key, new_value in new_section.items():
+            target[key] = _merge_field(target.get(key), new_value)
 
     # unresolved: union by field name; drop entries now answered by a value
     resolved_fields = set()

@@ -1,16 +1,30 @@
 """Structured conversational-state extraction for StateJar.
 
-Deterministic rule-based extraction (regex + keyword patterns) is the only
-path that ever runs in production. An optional GLiNER neural layer can be
-switched on with EXTRACTOR_MODE=gliner; it only ever *fills gaps* the rules
-left empty — a rule-extracted value is never overwritten.
+Extraction is a two-stage pipeline:
 
-Production safety:
-  * gliner/torch live in requirements-ml.txt, never requirements.txt.
-  * The import and the model load are both deferred to first use, so a
-    deployment without the extras pays nothing and startup never blocks.
+  1. a deterministic rule engine (regex + keyword patterns), and
+  2. a GLiNER neural pass that catches everything the patterns missed.
+
+Stage 2 is a standard part of the pipeline, not an add-on: it runs whenever
+the model can be loaded (EXTRACTOR_MODE=auto, the default). It broadens
+coverage — names, organizations, locations, contact details, amounts, dates,
+requirements, products, decisions, goals — so a fact stated in a phrasing no
+regex anticipated still reaches the state.
+
+Rules win every conflict. Stage 2 only ever writes to a field stage 1 left
+empty, because extraction feeds canonicalization: whatever wins here decides
+the handle, and the rule engine is the deterministic half.
+
+Deployment:
+  * gliner/torch live in requirements-ml.txt, never requirements.txt, so the
+    Railway build stays small. Where the extras are absent the pipeline
+    silently runs stage 1 alone.
+  * Import and model load are both deferred to first use, so startup never
+    blocks and a deployment without the extras pays nothing.
   * Any failure (missing package, download error, bad prediction) logs once
     and falls back to the rule result.
+  * EXTRACTOR_MODE=rules forces stage 1 alone — the escape hatch when you
+    need extraction to be reproducible across machines.
 """
 
 from __future__ import annotations
@@ -34,13 +48,43 @@ SOURCE_GLINER = "gliner+rules"
 
 GLINER_MODEL_NAME = "urchade/gliner_multi-v2.1"
 
-# Free-text entity types; GLiNER is zero-shot so these are the prompt.
+# EXTRACTOR_MODE values. "auto" and "gliner" both run the neural stage and
+# degrade to rules when it is unavailable; "rules" forces it off. Anything
+# unrecognised is treated as "rules" — a typo must never silently put a
+# neural model on the write path.
+MODE_AUTO = "auto"
+MODE_GLINER = "gliner"
+MODE_RULES = "rules"
+_NEURAL_MODES = {MODE_AUTO, MODE_GLINER}
+
+# Entity label -> where it lands in StructuredState. GLiNER is zero-shot, so
+# these label strings *are* the prompt: widening this table is how the
+# pipeline learns to keep a new kind of fact. Money and contact preference
+# need parsing, so they are handled explicitly in the merge below.
+GLINER_TARGETS: dict[str, tuple[str, str]] = {
+    "person name": ("facts", "name"),
+    "organization or company": ("facts", "organization"),
+    "city or location": ("facts", "city"),
+    "email address": ("facts", "email"),
+    "phone number": ("facts", "phone"),
+    "date or deadline": ("constraints", "deadline"),
+    "decision": ("decisions", "choice"),
+    "product or item": ("decisions", "item"),
+    "goal or objective": ("goals", "primary"),
+}
+
+# Labels that accumulate instead of replacing. The list is kept sorted so the
+# canonical bytes never depend on the order GLiNER happened to emit spans in
+# (the canonicalizer preserves list order, it does not sort for us).
+GLINER_LIST_TARGETS: dict[str, tuple[str, str]] = {
+    "requirement or specification": ("constraints", "requirements"),
+}
+
 GLINER_LABELS = [
-    "person name",
+    *GLINER_TARGETS,
+    *GLINER_LIST_TARGETS,
     "money amount",
-    "date or deadline",
     "contact preference",
-    "decision",
 ]
 
 # Loaded at most once per process — a failed attempt is never retried, so a
@@ -49,7 +93,7 @@ _gliner_state: dict[str, Any] = {"attempted": False, "model": None}
 
 
 def _gliner_enabled() -> bool:
-    return get_settings().extractor_mode.strip().lower() == "gliner"
+    return get_settings().extractor_mode.strip().lower() in _NEURAL_MODES
 
 
 def _load_gliner_model() -> Any | None:
@@ -266,16 +310,22 @@ def _merge_gliner(text: str, state: StructuredState) -> bool:
         logger.warning("GLiNER prediction failed (%s) — using rules only", exc)
         return False
 
+    sections: dict[str, dict[str, Any]] = {
+        "facts": state.facts,
+        "preferences": state.preferences,
+        "decisions": state.decisions,
+        "constraints": state.constraints,
+        "goals": state.goals,
+    }
+    touched_lists: set[tuple[str, str]] = set()
+
     for ent in entities:
         label = str(ent.get("label", "")).strip().lower()
         value = str(ent.get("text", "")).strip()
         if not value:
             continue
 
-        if label == "person name":
-            state.facts.setdefault("name", value)
-
-        elif label == "money amount":
+        if label == "money amount":
             # skip entirely if the rules already found any budget figure —
             # adding the other key would fabricate a second, conflicting one
             if "budget_inr" not in state.constraints and "budget_inr_max" not in state.constraints:
@@ -288,16 +338,27 @@ def _merge_gliner(text: str, state: StructuredState) -> bool:
                     )
                     state.constraints[key] = amount
 
-        elif label == "date or deadline":
-            state.constraints.setdefault("deadline", value)
-
         elif label == "contact preference":
             if "contact_mode" not in state.preferences and not state.conflicts:
                 if mode := _contact_mode_from(value):
                     state.preferences["contact_mode"] = mode
 
-        elif label == "decision":
-            state.decisions.setdefault("choice", value)
+        elif target := GLINER_TARGETS.get(label):
+            section, field = target
+            sections[section].setdefault(field, value)
+
+        elif target := GLINER_LIST_TARGETS.get(label):
+            section, field = target
+            bucket = sections[section].setdefault(field, [])
+            if isinstance(bucket, list):  # a rule scalar here wins outright
+                if value not in bucket:
+                    bucket.append(value)
+                touched_lists.add((section, field))
+
+    # sorted, so identical text yields identical canonical bytes no matter
+    # what order the model emitted the spans in
+    for section, field in touched_lists:
+        sections[section][field] = sorted(sections[section][field])
 
     return True
 

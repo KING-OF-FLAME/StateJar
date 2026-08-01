@@ -90,3 +90,68 @@ def test_same_update_is_deterministic() -> None:
     _, h1 = evolve_state(OLD_STATE, update, "shm_" + "a" * 40)
     _, h2 = evolve_state(OLD_STATE, update, "shm_" + "a" * 40)
     assert h1 == h2
+
+
+# --- accumulating (list-valued) fields ----------------------------------------
+# The extractor can collect a field rather than replace it, e.g. the
+# requirements it gathers across a conversation. Those must union, not
+# overwrite: a later message adding one requirement must not drop the rest.
+
+
+def test_list_fields_accumulate_across_turns() -> None:
+    old = {**OLD_STATE, "constraints": {
+        "budget_inr_max": 2000, "requirements": ["SOC2 compliant"],
+    }}
+    new_state, _ = evolve_state(
+        old, {"constraints": {"requirements": ["SSO support"]}}, _handle_of(old)
+    )
+    assert new_state["constraints"]["requirements"] == ["SOC2 compliant", "SSO support"]
+    # the scalar alongside it is untouched
+    assert new_state["constraints"]["budget_inr_max"] == 2000
+
+
+def test_list_union_is_deduped_and_sorted() -> None:
+    old = {**OLD_STATE, "constraints": {"requirements": ["SSO support"]}}
+    new_state, _ = evolve_state(
+        old,
+        {"constraints": {"requirements": ["SSO support", "99.9% uptime"]}},
+        _handle_of(old),
+    )
+    assert new_state["constraints"]["requirements"] == ["99.9% uptime", "SSO support"]
+
+
+def test_list_arrival_order_does_not_change_the_handle() -> None:
+    """Two users stating the same requirements in either order must converge."""
+    base = {**OLD_STATE, "constraints": {"requirements": ["SOC2 compliant"]}}
+    _, h1 = evolve_state(
+        base, {"constraints": {"requirements": ["SSO support", "audit log"]}},
+        "shm_" + "a" * 40,
+    )
+    _, h2 = evolve_state(
+        base, {"constraints": {"requirements": ["audit log", "SSO support"]}},
+        "shm_" + "a" * 40,
+    )
+    assert h1 == h2
+
+
+def test_growing_a_list_is_not_a_conflict() -> None:
+    """A longer list is more information, not a contradiction — and a spurious
+    conflict record would stamp a wall-clock time into the state."""
+    old = {**OLD_STATE, "constraints": {"requirements": ["SOC2 compliant"]}}
+    conflicts = detect_conflicts(
+        old, {"constraints": {"requirements": ["SSO support"]}}
+    )
+    assert conflicts == []
+
+    new_state, _ = evolve_state(
+        old, {"constraints": {"requirements": ["SSO support"]}}, _handle_of(old)
+    )
+    # canonicalization drops empty lists, so an absent key means "none recorded"
+    assert new_state.get("conflicts", []) == []
+
+
+def test_scalar_replacing_a_list_still_conflicts() -> None:
+    """Only list-vs-list accumulates; a type change is still a real change."""
+    old = {**OLD_STATE, "constraints": {"requirements": ["SOC2 compliant"]}}
+    conflicts = detect_conflicts(old, {"constraints": {"requirements": "none"}})
+    assert [c["field"] for c in conflicts] == ["constraints.requirements"]

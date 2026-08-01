@@ -21,10 +21,12 @@ class Settings(BaseSettings):
         "https://www.statejar.com",
     ]
     # --- extraction ---
-    # "rules" (default, production) or "gliner" to additionally run the
-    # optional neural layer from requirements-ml.txt. Anything unavailable
-    # degrades silently back to rules.
-    extractor_mode: str = "rules"
+    # "auto" (default) runs the GLiNER stage whenever the ML extras are
+    # installed and degrades silently to the rule engine when they are not,
+    # which is what happens on Railway. "gliner" is the explicit synonym.
+    # "rules" forces the deterministic engine alone — use it when extraction
+    # must be reproducible across machines.
+    extractor_mode: str = "auto"
     # --- retrieval ---
     # Off by default. When true (and sentence-transformers is installed) a
     # query the keyword intent map does not recognise falls back to embedding
