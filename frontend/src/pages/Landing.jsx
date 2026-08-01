@@ -93,6 +93,51 @@ const STATS = [
 ]
 
 /* Adds .in when the element scrolls into view; children stagger via --d. */
+/* Below-the-fold module clips. `autoPlay` overrides preload="metadata" and
+   pulls the whole file immediately, so ten of these were competing with the
+   JS bundle for bandwidth on first paint. Here the src is only attached once
+   the clip is near the viewport, then it plays. */
+function LazyVideo({ src, ...rest }) {
+  const ref = useRef(null)
+  const [load, setLoad] = useState(false)
+
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    if (!('IntersectionObserver' in window)) {
+      setLoad(true)
+      return
+    }
+    const io = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setLoad(true)
+          io.disconnect()
+        }
+      },
+      { rootMargin: '300px' }, // start fetching just before it is scrolled to
+    )
+    io.observe(el)
+    return () => io.disconnect()
+  }, [])
+
+  useEffect(() => {
+    if (load) ref.current?.play?.().catch(() => {}) // autoplay may be blocked
+  }, [load])
+
+  return (
+    <video
+      ref={ref}
+      src={load ? src : undefined}
+      preload="none"
+      loop
+      muted
+      playsInline
+      {...rest}
+    />
+  )
+}
+
 function Reveal({ as: Tag = 'div', className = '', delay = 0, children, ...rest }) {
   const ref = useRef(null)
   useEffect(() => {
@@ -232,7 +277,7 @@ export default function Landing() {
       <nav className={`nav${scrolled ? ' nav-scrolled' : ''}`} aria-label="Main navigation">
         <div className="container nav-inner">
           <a className="brand" href="/">
-            <img className="brand-logo" src="/logo.png" alt="StateJar logo — a jar holding structured memory" />
+            <img className="brand-logo" src="/logo-mark.png" width="23" height="27" alt="StateJar logo — a jar holding structured memory" />
             State<span className="jar">Jar</span>
           </a>
           <button
@@ -257,7 +302,7 @@ export default function Landing() {
         <aside className={`nav-panel${menuOpen ? ' open' : ''}`} aria-label="Menu" aria-hidden={!menuOpen}>
           <div className="nav-panel-head">
             <a className="brand" href="/" onClick={closeMenu}>
-              <img className="brand-logo" src="/logo.png" alt="StateJar logo" />
+              <img className="brand-logo" src="/logo-mark.png" width="23" height="27" alt="StateJar logo" />
               State<span className="jar">Jar</span>
             </a>
             <button className="nav-panel-close" onClick={closeMenu} aria-label="Close menu">✕</button>
@@ -368,13 +413,8 @@ export default function Landing() {
             {FLOW.map((s, i) => (
               <Reveal className="flow-step" key={s.title} delay={i * 110}>
                 <div className="flow-media">
-                  <video
+                  <LazyVideo
                     src={s.video}
-                    autoPlay
-                    loop
-                    muted
-                    playsInline
-                    preload="metadata"
                     aria-label={`${s.title} stage animation`}
                   />
                 </div>
@@ -439,7 +479,7 @@ export default function Landing() {
         <div className="container footer-grid">
           <div className="footer-col">
             <a className="brand" href="/">
-              <img className="brand-logo" src="/logo.png" alt="StateJar logo" />
+              <img className="brand-logo" src="/logo-mark.png" width="23" height="27" alt="StateJar logo" />
               State<span className="jar">Jar</span>
             </a>
             <p className="footer-tag">Deterministic, minimal-disclosure memory for multi-session conversational AI.</p>

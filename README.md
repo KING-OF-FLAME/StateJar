@@ -30,7 +30,7 @@
   <tr>
     <td align="center"><b>70.7%</b><br><sub>tokens saved (measured)</sub></td>
     <td align="center"><b>10</b><br><sub>patent modules</sub></td>
-    <td align="center"><b>80</b><br><sub>tests passing</sub></td>
+    <td align="center"><b>205</b><br><sub>tests passing</sub></td>
     <td align="center"><b>SHA-256</b><br><sub>deterministic</sub></td>
   </tr>
 </table>
@@ -225,7 +225,7 @@ flowchart LR
 - AES-256-GCM Encryption
 - React 18 + Vite
 - OpenRouter Gateway
-- pytest (80 tests)
+- pytest (205 tests)
 
 ## Benchmark
 
@@ -235,10 +235,29 @@ Measured by [`backend/benchmarks/benchmark.py`](backend/benchmarks/benchmark.py)
 |---|---|---|
 | Total tokens sent (30 turns) | 5,808 | **1,699 (−70.7%)** |
 | Mean context per turn | 193.6 tokens | **56.6 tokens** |
+| Cost for the run (gpt-4o-mini input rate) | $0.000871 | **$0.000255 (−70.7%)** |
 | Determinism (100 shuffled-key canonicalize+hash runs) | — | **1/100 unique handle ✅** |
+| Repeated query returns an identical subset | — | **yes ✅** |
 | Median canonicalize+hash latency | — | **~1.8 ms** |
 
 Full report with per-turn CSV: [`backend/benchmarks/results.md`](backend/benchmarks/results.md). Run it yourself: `python benchmarks/benchmark.py`.
+
+## 📚 Documentation
+
+| Document | What's in it |
+|---|---|
+| [`docs/api.md`](docs/api.md) | **Developer API quickstart** — generate an `sj_live_…` key, then ingest / query / chat with three copy-paste `curl` calls. Also readable in-app under **API Docs**. |
+| [`SECURITY.md`](SECURITY.md) | **Threat model** — 18 threats mapped to their mitigation and the test that enforces each, plus the honest limitations. |
+| [`docs/deployment.md`](docs/deployment.md) | Deploying the stack: Railway (API + MySQL) and Vercel (frontend), with the custom domain. |
+| [`backend/benchmarks/results.md`](backend/benchmarks/results.md) | Full benchmark report, per-turn CSV included. |
+
+`GET /api/v1/health` returns the commit each instance is running, so a deployed
+build can be checked against `main` without guessing:
+
+```bash
+curl https://statejar-production.up.railway.app/api/v1/health
+# {"status":"ok","version":"32fc8d9"}
+```
 
 <br>
 

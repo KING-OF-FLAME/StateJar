@@ -14,6 +14,7 @@ from app.llm.gateway import models_router
 from app.llm.gateway import router as keys_router
 from app.memory.routes import router as memory_router
 from app.security import SecurityHeadersMiddleware, limiter
+from app.version import git_sha
 
 settings = get_settings()
 
@@ -109,7 +110,12 @@ api_v1 = APIRouter(prefix="/api/v1")
 
 @api_v1.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok"}
+    """Liveness plus the commit this instance is running.
+
+    `version` makes "is production actually running local main?" a one-line
+    check rather than an assumption.
+    """
+    return {"status": "ok", "version": git_sha()}
 
 
 api_v1.include_router(auth_router)
