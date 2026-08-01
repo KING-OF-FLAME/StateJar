@@ -56,10 +56,17 @@ git status --ignored | findstr .env   # backend/.env must appear under ignored
 
    The `${{MySQL.…}}` references resolve automatically to the plugin's values (use the private/internal host if offered — faster and free of egress fees).
 4. Deploy (happens automatically on save). Wait for the build, then open the service's **Settings → Networking → Generate Domain** to get a public URL like `https://statejar-api.up.railway.app`.
-5. Smoke test:
+5. **Brand the API domain** (optional but recommended). Still under **Settings → Networking**, choose **Custom Domain** and add `api.statejar.com`. Railway gives you a CNAME target; add it at your DNS provider and wait for the certificate to go green. StateJar's own deployment uses:
+
+   | Host | Type | Value |
+   |---|---|---|
+   | `api` | CNAME | the target Railway shows you |
+
+   The generated `*.up.railway.app` URL keeps working afterwards — both hostnames reach the same service, so existing integrations are not broken by the switch.
+6. Smoke test (the `version` field is the commit the instance is running, so you can check a deploy against `main`):
    ```bash
-   curl https://statejar-api.up.railway.app/api/v1/health
-   # → {"status":"ok"}
+   curl https://api.statejar.com/api/v1/health
+   # → {"status":"ok","version":"25e7afb"}
    ```
 
 ## 3. Vercel — frontend deploy
@@ -70,9 +77,19 @@ git status --ignored | findstr .env   # backend/.env must appear under ignored
 
    | Variable | Value |
    |---|---|
-   | `VITE_API_URL` | `https://statejar-api.up.railway.app` (your Railway URL, **no trailing slash**) |
+   | `VITE_API_URL` | `https://api.statejar.com` (your API domain, **no trailing slash**) |
 
-   > Vite bakes env vars in at build time — if you change `VITE_API_URL` later, trigger a **Redeploy**.
+   > ⚠ **Vite bakes env vars in at build time, not at runtime.** Editing
+   > `VITE_API_URL` in the Vercel dashboard changes nothing on the live site
+   > until you trigger a **Redeploy** — the old value is compiled into the
+   > shipped JS bundle. After redeploying, confirm the new base is really in
+   > the bundle rather than assuming:
+   >
+   > ```bash
+   > curl -s https://statejar.com/ | grep -oE '/assets/[^"]+\.js' | head -1
+   > # then fetch that asset and grep it:
+   > curl -s https://statejar.com/assets/index-XXXX.js | grep -c 'api.statejar.com'
+   > ```
 4. Deploy. You get `https://statejar.vercel.app` (or similar).
 5. Quick check: open the URL, sign up, log in — if login works, CORS and the API URL are correctly wired.
 
@@ -89,10 +106,15 @@ git status --ignored | findstr .env   # backend/.env must appear under ignored
 Back in Railway → backend service → **Variables** → update:
 
 ```
-CORS_ORIGINS=["https://statejar.vercel.app","https://statejar.in","https://www.statejar.in"]
+CORS_ORIGINS=["https://statejar.vercel.app","https://statejar.com","https://www.statejar.com"]
 ```
 
 (Replace with your real domain. Keep it a strict JSON array — single quotes or trailing commas break parsing.) Railway redeploys automatically. Local dev is unaffected: the code's built-in default already allows `http://localhost:5173`, and the Vite proxy is same-origin anyway.
+
+> **Do not add `https://api.statejar.com` here.** An `Origin` is the page
+> making the request — the frontend — never the API being called. Listing the
+> API's own hostname does nothing, and both the apex and `www` frontend
+> domains must be present or a signup from whichever one is missing fails.
 
 ## 6. End-to-end smoke test
 
@@ -103,11 +125,22 @@ On `https://<your-domain>`:
 3. **Playground**, session-1 → send: `My name is Ayaan, I prefer email, budget ₹2000` → Memory State tab shows facts/preferences/constraints and a `shm_…` handle.
 4. **+ New session** → send: `Book my delivery` → Retrieved Context tab shows only the minimal subset (contact_mode + budget) with the tokens-saved badge — cross-session memory working.
 5. **Audit tab** shows the request with handle + subset keys.
-6. From a terminal, confirm CORS is actually locked:
+6. From a terminal, confirm CORS is actually locked. Check both directions —
+   that your own origin is allowed, and that a foreign one is not:
    ```bash
-   curl -s -i -X OPTIONS https://statejar-api.up.railway.app/api/v1/health -H "Origin: https://evil.example" -H "Access-Control-Request-Method: GET" | findstr access-control
-   # → no access-control-allow-origin header for the foreign origin
+   # allowed: echoes the origin back
+   curl -s -D - -o /dev/null -X OPTIONS https://api.statejar.com/api/v1/auth/login \
+     -H "Origin: https://statejar.com" -H "Access-Control-Request-Method: POST" \
+     | grep -i access-control-allow-origin
+   # → access-control-allow-origin: https://statejar.com
+
+   # foreign: no allow-origin header at all, so the browser blocks it
+   curl -s -D - -o /dev/null -X OPTIONS https://api.statejar.com/api/v1/auth/login \
+     -H "Origin: https://evil.example" -H "Access-Control-Request-Method: POST" \
+     | grep -i access-control-allow-origin
+   # → (no output)
    ```
+   On Windows PowerShell, swap `grep -i` for `Select-String`.
 
 All six pass → production is live.
 

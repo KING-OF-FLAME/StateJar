@@ -7,8 +7,12 @@ content hash, and returns only the minimal subset a later query needs.
 Everything below is copy-pasteable. Set your base URL once:
 
 ```bash
-export STATEJAR_URL=http://localhost:8000      # or your deployed origin
+export STATEJAR_URL=https://api.statejar.com
 ```
+
+> Running StateJar yourself? Use `http://localhost:8000` instead. The older
+> `https://statejar-production.up.railway.app` still resolves to the same
+> service and keeps working, so existing integrations do not break.
 
 ## 1. Get an API key
 

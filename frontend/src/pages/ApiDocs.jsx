@@ -6,6 +6,11 @@ import { api } from '../lib/api.js'
    without leaving the app. Examples are pre-filled with the reader's own
    base URL, and with a real key's last 4 when they have one. */
 
+// Branded public API. The original Railway host still serves the same
+// service and is kept working for existing integrations, but new code
+// should be pointed here.
+const PUBLIC_API_BASE = 'https://api.statejar.com'
+
 const CURL = {
   ingest: (base, key) => `curl -X POST "${base}/api/v1/memory/ingest" \\
   -H "X-API-Key: ${key}" \\
@@ -101,7 +106,11 @@ export default function ApiDocs() {
   const [hasKey, setHasKey] = useState(null)   // null = still checking
   const [last4, setLast4] = useState(null)
 
-  const base = import.meta.env.VITE_API_URL || window.location.origin
+  // What this build actually calls. VITE_API_URL is baked in at build time,
+  // so it is the truth for a deployed console; when it is unset (local dev)
+  // fall back to the public branded API rather than this page's own origin,
+  // so the snippets are always something a reader can paste and run.
+  const base = import.meta.env.VITE_API_URL || PUBLIC_API_BASE
 
   useEffect(() => {
     api('/apikeys')

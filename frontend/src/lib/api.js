@@ -15,7 +15,8 @@ export function isAuthed() {
   return Boolean(_token)
 }
 
-// Production: set VITE_API_URL to the backend origin (e.g. https://statejar-api.up.railway.app).
+// Production: set VITE_API_URL to the backend origin (https://api.statejar.com).
+// Vite bakes it in at build time, so changing it needs a redeploy.
 // Dev: leave unset — the Vite proxy forwards /api to localhost:8000.
 // Strip any trailing slash so we never trigger a redirect (Safari drops CORS on redirects).
 const API_BASE = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '')

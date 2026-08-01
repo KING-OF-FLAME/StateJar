@@ -251,12 +251,16 @@ Full report with per-turn CSV: [`backend/benchmarks/results.md`](backend/benchma
 | [`docs/deployment.md`](docs/deployment.md) | Deploying the stack: Railway (API + MySQL) and Vercel (frontend), with the custom domain. |
 | [`backend/benchmarks/results.md`](backend/benchmarks/results.md) | Full benchmark report, per-turn CSV included. |
 
+The public API base is **`https://api.statejar.com`**. The original
+`https://statejar-production.up.railway.app` points at the same service and
+still works, so existing integrations keep running.
+
 `GET /api/v1/health` returns the commit each instance is running, so a deployed
 build can be checked against `main` without guessing:
 
 ```bash
-curl https://statejar-production.up.railway.app/api/v1/health
-# {"status":"ok","version":"32fc8d9"}
+curl https://api.statejar.com/api/v1/health
+# {"status":"ok","version":"25e7afb"}
 ```
 
 <br>
