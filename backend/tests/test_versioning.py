@@ -14,7 +14,7 @@ from app.memory.versioning import evolve_state
 OLD_STATE = {
     "facts": {"name": "Ayaan"},
     "preferences": {"contact_mode": "email"},
-    "constraints": {"budget_inr_max": 2000},
+    "constraints": {"budget": {"max": {"value": 2000, "currency": "INR"}}},
     "unresolved": [{"field": "delivery_time", "reason": "not provided"}],
     "conflicts": [],
 }
@@ -33,7 +33,7 @@ def test_budget_update_creates_new_handle_old_still_retrievable() -> None:
     store.save_state(old_handle, None, OLD_STATE, "v1", "v1", user_id=1, session_tag="s1")
 
     new_state, new_handle = evolve_state(
-        OLD_STATE, {"constraints": {"budget_inr_max": 2500}}, old_handle
+        OLD_STATE, {"constraints": {"budget": {"max": {"value": 2500, "currency": "INR"}}}}, old_handle
     )
     assert new_handle != old_handle
     store.save_state(new_handle, old_handle, new_state, "v1", "v1", user_id=1, session_tag="s1")
@@ -41,10 +41,10 @@ def test_budget_update_creates_new_handle_old_still_retrievable() -> None:
     # old record untouched, old value still retrievable
     old_row = store.get_state(old_handle)
     assert old_row is not None
-    assert old_row["state_json"]["constraints"]["budget_inr_max"] == 2000
+    assert old_row["state_json"]["constraints"]["budget"]["max"]["value"] == 2000
     # new record has new value and lineage
     new_row = store.get_state(new_handle)
-    assert new_row["state_json"]["constraints"]["budget_inr_max"] == 2500
+    assert new_row["state_json"]["constraints"]["budget"]["max"]["value"] == 2500
     assert new_row["parent_handle"] == old_handle
     assert store.list_versions(1, "s1") == [old_handle, new_handle]
 
@@ -73,7 +73,7 @@ def test_detect_conflicts_ignores_new_and_unchanged_fields() -> None:
 
 def test_evolve_does_not_mutate_old_state() -> None:
     snapshot = copy.deepcopy(OLD_STATE)
-    evolve_state(OLD_STATE, {"constraints": {"budget_inr_max": 9999}}, "shm_" + "a" * 40)
+    evolve_state(OLD_STATE, {"constraints": {"budget": {"max": {"value": 9999, "currency": "INR"}}}}, "shm_" + "a" * 40)
     assert OLD_STATE == snapshot
 
 
@@ -100,14 +100,14 @@ def test_same_update_is_deterministic() -> None:
 
 def test_list_fields_accumulate_across_turns() -> None:
     old = {**OLD_STATE, "constraints": {
-        "budget_inr_max": 2000, "requirements": ["SOC2 compliant"],
+        "budget": {"max": {"value": 2000, "currency": "INR"}}, "requirements": ["SOC2 compliant"],
     }}
     new_state, _ = evolve_state(
         old, {"constraints": {"requirements": ["SSO support"]}}, _handle_of(old)
     )
     assert new_state["constraints"]["requirements"] == ["SOC2 compliant", "SSO support"]
     # the scalar alongside it is untouched
-    assert new_state["constraints"]["budget_inr_max"] == 2000
+    assert new_state["constraints"]["budget"]["max"]["value"] == 2000
 
 
 def test_list_union_is_deduped_and_sorted() -> None:

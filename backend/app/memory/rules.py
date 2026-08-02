@@ -137,7 +137,9 @@ def find_city(clause: str) -> str | None:
 
 _CEILING = re.compile(
     r"\b(?:under|below|max(?:imum)?|upto|up\s+to|at\s+most|within|less\s+than|"
-    r"no(?:t)?\s+more\s+than|tak|se\s+z?y?ada\s+nahi|se\s+jada\s+nahi)\b",
+    r"no(?:t)?\s+more\s+than|nothing\s+(?:over|above|more\s+than)|not\s+above|"
+    r"no\s+higher\s+than|ceiling|capped\s+at|"
+    r"tak|se\s+z?y?ada\s+nahi|se\s+jada\s+nahi)\b",
     re.IGNORECASE,
 )
 # "only" is deliberately absent: it reads as a ceiling in "only 5k" but not in
@@ -275,8 +277,12 @@ _MONTHS = (
     "january|february|march|april|may|june|july|august|september|october|"
     "november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec"
 )
+# A stated year is part of the date. Without the optional trailing group,
+# "15 Aug 2026" captured only "15 Aug" and the year was silently dropped —
+# the normalizer then *inferred* a year it had actually been told.
 _ABS_DATE = re.compile(
-    rf"\b(\d{{1,2}}(?:st|nd|rd|th)?\s+(?:{_MONTHS})|(?:{_MONTHS})\s+\d{{1,2}}(?:st|nd|rd|th)?)\b",
+    rf"\b(\d{{1,2}}(?:st|nd|rd|th)?\s+(?:{_MONTHS})\.?(?:,?\s+\d{{4}})?"
+    rf"|(?:{_MONTHS})\.?\s+\d{{1,2}}(?:st|nd|rd|th)?(?:,?\s+\d{{4}})?)\b",
     re.IGNORECASE,
 )
 _WEEKDAY = r"monday|tuesday|wednesday|thursday|friday|saturday|sunday"
@@ -342,6 +348,324 @@ _REQUIREMENT = re.compile(
     r"([A-Za-z0-9][\w %.+-]*?)(?=\s*(?:[.,;!]|$))",
     re.IGNORECASE,
 )
+
+# --- capture validation -------------------------------------------------------
+#
+# A free-text rule captures whatever follows its trigger, so "I need it before
+# 15 August" yielded the requirement "it before 15 August": meaningless, a
+# duplicate of the deadline, and — because state is append-only — re-sent to
+# the model on every later turn with nothing to garbage-collect it.
+#
+# The trigger word is not the problem; the unvalidated tail is. A capture has
+# to name something before it may become a fact.
+
+# leading words that carry no meaning but do not invalidate what follows
+_LEADING_FILLER = frozenset({
+    "the", "a", "an", "some", "any", "my", "our", "your", "its", "their",
+    "one", "at", "least", "about", "around", "approximately", "roughly",
+})
+
+# a span *starting* with one of these is a fragment, not a thing
+_FRAGMENT_HEADS = frozenset({
+    "it", "this", "that", "these", "those", "them", "they", "he", "she",
+    "him", "her", "us", "we", "you", "i", "me", "who", "which", "what",
+    "before", "after", "by", "with", "from", "to", "for", "of", "in", "on",
+    "until", "till", "than", "then", "and", "or", "but", "so", "because",
+    "is", "are", "was", "were", "be", "been", "being", "will", "would",
+    "not", "no", "yet", "very", "really", "just",
+})
+
+# A span that is only a date. The month name is required when letters are
+# present — without that, `[a-z]*` swallowed anything, so "8 cores" read as a
+# date and a real requirement was thrown away.
+_DATEISH = re.compile(
+    r"^\d{1,4}[\s./-]*(?:st|nd|rd|th)?"
+    r"(?:[\s./-]*(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*)?"
+    r"[\s,./-]*\d{0,4}$",
+    re.IGNORECASE,
+)
+
+
+def valid_capture(span: str | None) -> str | None:
+    """Trim a free-text capture to a real span, or reject it.
+
+    Filler at the head is stripped ("a landing page" -> "landing page") because
+    the noun is still there. A pronoun or preposition at the head is fatal: it
+    means the rule matched a tail rather than a thing.
+    """
+    if not span:
+        return None
+    text = " ".join(str(span).split()).strip(" .,;:!?-–—")
+    if not text:
+        return None
+
+    words = text.split()
+    while words and words[0].lower().strip(".,") in _LEADING_FILLER:
+        words = words[1:]
+    if not words:
+        return None
+
+    if words[0].lower().strip(".,'") in _FRAGMENT_HEADS:
+        return None
+
+    cleaned = " ".join(words)
+    # a bare date or number belongs in its own typed field, never in free text
+    if _DATEISH.match(cleaned) or not re.search(r"[A-Za-z]{2}", cleaned):
+        return None
+    return cleaned
+
+
+# --- generic assignments ------------------------------------------------------
+#
+# Every field above needed its own hand-written pattern, which is why anything
+# outside name / city / budget / deadline / contact extracted nothing at all:
+# a real user asking about a flight, a flat or a doctor's appointment hit no
+# rule and StateJar remembered nothing.
+#
+# These patterns do not know any field names. They find the *shape* of an
+# assertion — "my X is Y", "X: Y", "set X to Y" — and hand the pair to the
+# canonical registry, which decides whether X is a field StateJar keeps. Adding
+# a field to the registry therefore makes it extractable everywhere at once,
+# with no new regex, and an unrecognised X lands in quarantine where it becomes
+# the evidence for adding one.
+
+_KEY_CHARS = r"[A-Za-z][A-Za-z _-]{0,28}"
+# Stops at a clause boundary, so "my destination is Goa and my budget is 40k"
+# does not make the destination "Goa and my budget is 40k". A dot only ends
+# the value when it ends the sentence — otherwise "meera@example.com" and
+# "Next.js" get truncated mid-token.
+_VALUE = r"(?:(?!\s+(?:and|aur|but)\s+)(?!\.(?:\s|$))[^,;!?\n]){1,80}"
+
+_ASSIGNMENT_PATTERNS = (
+    # "my budget is 5000", "my preferred contact is email"
+    re.compile(rf"\bmy\s+(?P<key>{_KEY_CHARS}?)\s+(?:is|are|=|:)\s+(?P<val>{_VALUE})",
+               re.IGNORECASE),
+    # "set the deadline to 15 Aug", "change destination to Goa"
+    re.compile(rf"\b(?:set|change|update|make)\s+(?:my|the)?\s*(?P<key>{_KEY_CHARS}?)"
+               rf"\s+(?:to|as|=)\s+(?P<val>{_VALUE})", re.IGNORECASE),
+    # "destination: Goa", "bedrooms = 3" — a labelled field, form-style
+    re.compile(rf"(?:^|[,;\n])\s*(?P<key>{_KEY_CHARS}?)\s*[:=]\s+(?P<val>{_VALUE})",
+               re.IGNORECASE),
+    # "budget of 50k", "a party of 4"
+    re.compile(rf"\b(?P<key>{_KEY_CHARS}?)\s+of\s+(?P<val>{_VALUE})", re.IGNORECASE),
+    # "prefer window seat", "I want the premium plan"
+    re.compile(rf"\b(?:i\s+)?(?:prefer|want|choose|pick|select)\s+(?:the\s+)?"
+               rf"(?P<val>{_VALUE})", re.IGNORECASE),
+)
+
+# A trailing verb belongs to the sentence, not to the field name: in "my
+# deadline is", the key is "deadline". Strip these so "my delivery address is"
+# resolves rather than missing by one word.
+_KEY_TRIM = re.compile(r"^(?:the|a|an|my|our|your)\s+|\s+(?:is|are|was|were)$",
+                       re.IGNORECASE)
+
+
+def find_assignments(clause: str) -> list[tuple[str, str]]:
+    """(raw_key, raw_value) pairs asserted in this clause.
+
+    Deliberately says nothing about which keys are real — that is the
+    registry's job. Returning a pair the registry rejects is the intended
+    outcome for an unknown field, not a failure.
+    """
+    found: list[tuple[str, str]] = []
+    for pattern in _ASSIGNMENT_PATTERNS:
+        for m in pattern.finditer(clause):
+            groups = m.groupdict()
+            value = (groups.get("val") or "").strip(" .,;:!?")
+            if not value:
+                continue
+            # the preference form has no key; the value names itself and the
+            # registry's enum normalizers decide which field it belongs to
+            key = (groups.get("key") or "").strip()
+            key = _KEY_TRIM.sub("", key).strip().replace(" ", "_").replace("-", "_")
+            if key:
+                found.append((key.lower(), value))
+            else:
+                found.append(("", value))
+    return found
+
+
+# Aliases that are also ordinary English. Matched only in an unmistakably
+# declarative form, because the loose one turns conversation into facts:
+# "the area is nice" became area="nice", "what's the name of that place?"
+# named the user "That Place". A wrong fact is worse than a missing one — it
+# persists in state and is re-sent to the model on every later turn, which is
+# the same harm BUG-2 described, arriving by a different door.
+#
+# Typed fields are not listed here and do not need to be: a money, date, int
+# or enum normalizer rejects "nice" on its own. Only string- and list-valued
+# fields accept anything, so only those need the syntax to carry the weight.
+GENERIC_ALIASES = frozenset({
+    "name", "city", "area", "role", "language", "plan", "item", "task",
+    "date", "mode", "number", "count", "people", "place", "from", "channel",
+    "brand", "color", "colour", "text", "due", "needs", "goal", "decision",
+    "choice", "contact", "address", "condition", "complaint", "location",
+    "town", "residence", "org", "company", "technology", "platform",
+    "selected", "chosen", "picked", "intent", "purpose", "aim", "objective",
+})
+
+
+def _alternation(surfaces: list[str]) -> str:
+    """`payment_method` typed as "payment method" or "payment-method".
+
+    re.escape leaves `_` alone (it has not escaped word characters since 3.7),
+    so the substitution happens on the raw alias *before* escaping. Doing it
+    after silently matched nothing, which is why every multi-word field looked
+    unextractable.
+    """
+    return "|".join(
+        r"[\s_-]".join(re.escape(part) for part in s.split("_"))
+        # longest first so "payment method" wins over "payment"
+        for s in sorted(surfaces, key=len, reverse=True)
+    )
+
+
+def build_alias_matcher(aliases: dict[str, str]) -> dict[str, Any]:
+    """Compile the registry's own vocabulary into matchers.
+
+    The generic patterns above need a separator ("my age is 34"), but people
+    write forms too: "age 34", "allergies penicillin", "payment method UPI".
+    Matching a bare `<key> <value>` juxtaposition with an *arbitrary* key
+    pattern would turn any two adjacent words into a fact, so the key side is
+    the registry's actual alias list — an alias that is not a real field
+    simply does not exist.
+
+    Distinctive aliases get the loose form. Everyday words (GENERIC_ALIASES)
+    get a strict one: a colon, an equals, or an explicit "my X is Y".
+    """
+    lookup = {s.replace("_", " ").lower(): path for s, path in aliases.items()}
+    loose = [s for s in aliases if s.lower() not in GENERIC_ALIASES]
+    strict = [s for s in aliases if s.lower() in GENERIC_ALIASES]
+
+    patterns: list[Any] = []
+    if loose:
+        alt = _alternation(loose)
+        patterns.append(re.compile(
+            rf"\b(?P<key>{alt})\b\s*(?:is|are|:|=|-|of)?\s+(?P<val>{_VALUE})",
+            re.IGNORECASE))
+        # "2 passengers", "5 years experience", "3 bedrooms"
+        patterns.append(re.compile(
+            rf"\b(?P<val>\d[\d,.]*)\s*(?:years?\s+(?:of\s+)?)?(?P<key>{alt})\b",
+            re.IGNORECASE))
+    if strict:
+        alt = _alternation(strict)
+        # labelled, form-style: "name: Farhan", at a line or clause start
+        patterns.append(re.compile(
+            rf"(?:^|[,;\n])\s*(?P<key>{alt})\s*[:=]\s*(?P<val>{_VALUE})",
+            re.IGNORECASE))
+        # possessive and declarative: "my city is Jaipur"
+        patterns.append(re.compile(
+            rf"\bmy\s+(?P<key>{alt})\s+(?:is|are|was|:|=)\s+(?P<val>{_VALUE})",
+            re.IGNORECASE))
+        # A whole short clause that is nothing but the field and its value:
+        # "name Aarav", "city Pune". Anchoring to both ends is what keeps this
+        # safe — "the name of that place" and "the city was crowded" do not
+        # begin with the alias, so they cannot match.
+        patterns.append(re.compile(
+            rf"^(?P<key>{alt})\s+(?P<val>[^\s,;:]+(?:\s+[^\s,;:]+)?)\s*$",
+            re.IGNORECASE))
+    return {"patterns": patterns, "lookup": lookup}
+
+
+def find_alias_assignments(
+    clause: str, matcher: dict[str, Any]
+) -> list[tuple[str, str]]:
+    """(canonical_path, raw_value) pairs, keyed by the registry's vocabulary."""
+    lookup = matcher["lookup"]
+    found: list[tuple[str, str]] = []
+    for pattern in matcher["patterns"]:
+        for m in pattern.finditer(clause):
+            key = " ".join(m.group("key").replace("_", " ").replace("-", " ").split())
+            path = lookup.get(key.lower())
+            value = (m.group("val") or "").strip(" .,;:!?")
+            if path and value:
+                found.append((path, value))
+    return found
+
+
+# "from Pune to Goa" is a journey, not a home town. The city rule reads the
+# same words as a residence, so this runs first and claims them when both ends
+# are present — one "from X" is where you live, "from X to Y" is a route.
+_ROUTE = re.compile(
+    rf"\bfrom\s+({_NAME_WORD}(?:\s+{_NAME_WORD})?)\s+to\s+({_NAME_WORD}(?:\s+{_NAME_WORD})?)",
+    re.IGNORECASE,
+)
+
+
+# "order 3 t-shirts", "book 2 tickets" — the counted noun is arbitrary, so the
+# count is anchored on the verb rather than on a vocabulary of things.
+_ORDER_QTY = re.compile(
+    r"\b(?:order|book|buy|reserve|get|need|want|add)\s+(\d{1,4})\s+[A-Za-z]",
+    re.IGNORECASE,
+)
+
+_EMPLOYER = re.compile(
+    r"\b(?:work(?:ing|s)?\s+(?:at|for|with)|employed\s+(?:at|by)|"
+    r"i(?:'m| am)\s+(?:at|with))\s+"
+    rf"({_NAME_WORD}(?:\s+{_NAME_WORD})?)",
+    re.IGNORECASE,
+)
+
+# Payment is stated in forms the generic patterns miss: "cash on delivery",
+# "pay by card", "I'll use UPI". Its vocabulary is small and unambiguous
+# enough to be worth its own rule rather than a keyless enum guess, which
+# would also fire on "a light lunch".
+_PAYMENT = re.compile(
+    r"\b(?:pay(?:ing|ment)?\s+(?:by|via|with|using|through|mode|method)?\s*|"
+    r"i(?:'ll| will)\s+(?:pay\s+)?(?:use|with)\s+)?"
+    r"(cash\s+on\s+delivery|cod|upi|gpay|google\s+pay|phonepe|paytm|"
+    r"net\s?banking|credit\s+card|debit\s+card|card|paypal|wallet|cash)\b",
+    re.IGNORECASE,
+)
+
+
+def find_order_quantity(clause: str) -> int | None:
+    m = _ORDER_QTY.search(clause)
+    return int(m.group(1)) if m else None
+
+
+def find_employer(clause: str) -> str | None:
+    m = _EMPLOYER.search(clause)
+    if not m:
+        return None
+    value = m.group(1).strip(" .'’-")
+    if not value or any(w.lower() in NAME_STOPWORDS for w in value.split()):
+        return None
+    return _titlecase(value)
+
+
+def find_payment(clause: str) -> str | None:
+    m = _PAYMENT.search(clause)
+    return m.group(1) if m else None
+
+
+def find_route(clause: str) -> tuple[str, str] | None:
+    """(origin, destination) when the clause states both ends."""
+    m = _ROUTE.search(clause)
+    if not m:
+        return None
+    origin, destination = m.group(1).strip(" .'’-"), m.group(2).strip(" .'’-")
+    for value in (origin, destination):
+        if not value or any(w.lower() in NAME_STOPWORDS for w in value.split()):
+            return None
+    return _titlecase(origin), _titlecase(destination)
+
+
+def prune_subsumed(items: list[str]) -> list[str]:
+    """Drop entries that merely contain a shorter entry.
+
+    `split_clauses` deliberately yields the whole utterance as a final clause
+    so full-context patterns still fire, which means a free-text rule matches
+    both "landing page" and "landing page and my goal is to launch by Friday".
+    Keeping both stores the same requirement twice, the second time with the
+    next clause glued on.
+    """
+    kept: list[str] = []
+    for item in sorted(items, key=len):
+        lowered = item.lower()
+        if not any(re.search(rf"\b{re.escape(k.lower())}\b", lowered) for k in kept):
+            kept.append(item)
+    return sorted(kept)
 
 _GOAL = re.compile(
     r"\b(?:i want to|my goal is to|i(?:'m| am) (?:trying|looking) to|i need to)\s+"
@@ -478,5 +802,6 @@ __all__ = [
     "CONTACT_SYNONYMS", "DECISION_NOISE", "NAME_STOPWORDS", "find_decision",
     "find_city", "find_contact", "find_dates", "find_money", "find_name",
     "find_unresolved", "find_build_spec", "slugify", "split_clauses",
+    "valid_capture", "prune_subsumed", "find_assignments", "find_alias_assignments", "build_alias_matcher", "find_route",
     "_DECISION", "_DECISION_HI", "_GOAL", "_REQUIREMENT",
 ]

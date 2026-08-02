@@ -26,6 +26,8 @@ from sqlalchemy.engine import Engine
 
 from app.memory.canonicalizer import NORM_VERSION, SCHEMA_VERSION, canonicalize
 from app.memory.handle import generate_handle
+from app.memory.versioning import UNHASHED_KEYS
+from app.schema import canonical as canon
 from app.memory.storage import MemoryStore
 from app.timeutil import iso_utc
 
@@ -252,8 +254,12 @@ class AuditLogger:
         for dotted in entry["subset_keys"] or []:
             section, _, key = dotted.partition(".")
             container = state.get(section)
-            if isinstance(container, dict) and key in container:
-                subset.setdefault(section, {})[key] = container[key]
+            if isinstance(container, dict):
+                # a canonical path may be nested (constraints.budget.max), so
+                # the whole path is followed rather than one level
+                value = canon.read_path(state, dotted)
+                if value is not None:
+                    canon.write_path(subset, dotted, value)
             elif isinstance(container, list):  # unresolved/conflicts entries by field
                 matches = [
                     e for e in container
@@ -263,8 +269,12 @@ class AuditLogger:
                     subset.setdefault(section, []).extend(matches)
 
         # content-addressed: re-deriving the handle from the stored state is a
-        # byte-level integrity check, not a formality
-        canonical = canonicalize(state)
+        # byte-level integrity check, not a formality. The audit artifacts are
+        # excluded exactly as they were when the handle was minted — hashing
+        # them would make verification fail on any state that ever conflicted.
+        canonical = canonicalize(
+            {k: v for k, v in state.items() if k not in UNHASHED_KEYS}
+        )
         recomputed = generate_handle(
             canonical, entry["schema_version"] or SCHEMA_VERSION,
             entry["norm_version"] or NORM_VERSION,

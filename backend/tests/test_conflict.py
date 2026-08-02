@@ -5,7 +5,7 @@ from app.memory.conflict import detect_conflicts
 OLD_STATE = {
     "facts": {"name": "Ayaan"},
     "preferences": {"contact_mode": "email"},
-    "constraints": {"budget_inr_max": 2000},
+    "constraints": {"budget": {"max": {"value": 2000, "currency": "INR"}}},
     "conflicts": [],
 }
 
@@ -31,10 +31,10 @@ def test_unchanged_value_is_not_a_conflict() -> None:
 def test_multiple_conflicts_detected() -> None:
     conflicts = detect_conflicts(
         OLD_STATE,
-        {"preferences": {"contact_mode": "whatsapp"}, "constraints": {"budget_inr_max": 2500}},
+        {"preferences": {"contact_mode": "whatsapp"}, "constraints": {"budget": {"max": {"value": 2500, "currency": "INR"}}}},
     )
     fields = {c["field"] for c in conflicts}
-    assert fields == {"preferences.contact_mode", "constraints.budget_inr_max"}
+    assert fields == {"preferences.contact_mode", "constraints.budget.max"}
 
 
 def test_empty_new_extracted_yields_no_conflicts() -> None:

@@ -9,6 +9,7 @@ naming people "via".
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Generator
 from typing import Any
 
@@ -26,6 +27,7 @@ from app.memory.extractor import (
     extract_rules,
 )
 from app.memory.handle import generate_handle
+from app.schema import canonical as canon
 
 
 @pytest.fixture(autouse=True)
@@ -42,12 +44,21 @@ def _rules_only(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
 
 
 def fields(state: StructuredState) -> dict[str, Any]:
-    """Flat dotted view, so assertions read like the spec."""
+    """Flat canonical-path view, so assertions read like the registry.
+
+    Paths are nested now (`constraints.budget.max`), and money and dates are
+    normalized objects. Those objects are unwrapped to the primitive they
+    carry — the tests are about which field got which amount, not about the
+    shape of the envelope, which `test_normalizers.py` covers directly.
+    """
     out: dict[str, Any] = {}
     dumped = state.model_dump()
-    for section in ("facts", "preferences", "decisions", "constraints", "goals"):
-        for key, value in (dumped.get(section) or {}).items():
-            out[f"{section}.{key}"] = value
+    for section in canon.ACTIVE_SECTIONS:
+        for path in canon.leaf_paths_in(dumped.get(section), section):
+            value = canon.read_path(dumped, path)
+            if isinstance(value, dict):
+                value = value.get("value", value.get("iso", value))
+            out[path] = value
     for item in dumped.get("unresolved") or []:
         out[f"unresolved.{item['field']}"] = item["reason"]
     return out
@@ -63,7 +74,7 @@ def test_the_failing_production_sentence() -> None:
     assert got == {
         "facts.name": "Yashraj",
         "facts.city": "Pune",
-        "constraints.budget_inr": 3000,
+        "constraints.budget.max": 3000,
         "preferences.contact_mode": "email",
     }
     assert len(got) == 4
@@ -73,11 +84,11 @@ def test_filler_words_are_never_names() -> None:
     """The exact regression: `[A-Z]` under IGNORECASE matched "via"."""
     result = extract("can you call me via call instead of email")
     got = fields(result.state)
-    assert got["preferences.contact_mode"] == "call"
+    assert got["preferences.contact_mode"] == "phone"
     assert "facts.name" not in got
     conflicts = result.state.model_dump()["conflicts"]
     assert conflicts and conflicts[0]["field"] == "contact_mode"
-    assert set(conflicts[0]["values"]) == {"call", "email"}
+    assert set(conflicts[0]["values"]) == {"phone", "email"}
 
 
 @pytest.mark.parametrize("text", [
@@ -102,7 +113,7 @@ def test_long_english_multi_clause() -> None:
     ).state)
     assert got["facts.name"] == "Aarav Sharma"
     assert got["facts.city"] == "Pune"
-    assert got["constraints.budget_inr"] == 40000
+    assert got["constraints.budget.max"] == 40000
     assert got["preferences.contact_mode"] == "whatsapp"
     assert got["constraints.requirements"] == ["16GB RAM"]
 
@@ -114,7 +125,7 @@ def test_every_clause_contributes() -> None:
     ).state)
     assert got["facts.name"] == "Neha"
     assert got["facts.city"] == "Bengaluru"
-    assert got["constraints.budget_inr_max"] == 25000   # "under" is a ceiling
+    assert got["constraints.budget.max"] == 25000   # "under" is a ceiling
     assert got["preferences.contact_mode"] == "sms"
 
 
@@ -127,8 +138,7 @@ def test_hinglish_name_city_and_ceiling() -> None:
     ).state)
     assert got["facts.name"] == "Rohan"
     assert got["facts.city"] == "Delhi"
-    assert got["constraints.budget_inr_max"] == 2000
-    assert "constraints.budget_inr" not in got
+    assert got["constraints.budget.max"] == 2000
 
 
 def test_hinglish_decision_and_unresolved() -> None:
@@ -137,7 +147,7 @@ def test_hinglish_decision_and_unresolved() -> None:
         "delivery date abhi decide nahi kiya"
     ).state)
     assert got["facts.name"] == "Priya"
-    assert got["constraints.budget_inr_max"] == 150000     # "tak" is a ceiling
+    assert got["constraints.budget.max"] == 150000     # "tak" is a ceiling
     assert got["decisions.choice"] == "ASUS"               # not the particle "hai"
     assert "unresolved.delivery_date" in got
 
@@ -146,20 +156,20 @@ def test_hinglish_decision_and_unresolved() -> None:
 
 
 @pytest.mark.parametrize("text,path,value", [
-    ("i have 3000rs", "constraints.budget_inr", 3000),
-    ("i have 3000 rs", "constraints.budget_inr", 3000),
-    ("rs 3000 is my budget", "constraints.budget_inr", 3000),
-    ("₹3000 available", "constraints.budget_inr", 3000),
-    ("3000 rupees in hand", "constraints.budget_inr", 3000),
-    ("my budget is 3k", "constraints.budget_inr", 3000),
-    ("budget 40k", "constraints.budget_inr", 40000),
-    ("1.5 lakh ka budget", "constraints.budget_inr", 150000),
-    ("2 crore budget", "constraints.budget_inr", 20000000),
-    ("budget under 2000", "constraints.budget_inr_max", 2000),
-    ("max 5k", "constraints.budget_inr_max", 5000),
-    ("40k tak", "constraints.budget_inr_max", 40000),
-    ("2000 se zyada nahi", "constraints.budget_inr_max", 2000),
-    ("not more than 1 lakh", "constraints.budget_inr_max", 100000),
+    ("i have 3000rs", "constraints.budget.max", 3000),
+    ("i have 3000 rs", "constraints.budget.max", 3000),
+    ("rs 3000 is my budget", "constraints.budget.max", 3000),
+    ("₹3000 available", "constraints.budget.max", 3000),
+    ("3000 rupees in hand", "constraints.budget.max", 3000),
+    ("my budget is 3k", "constraints.budget.max", 3000),
+    ("budget 40k", "constraints.budget.max", 40000),
+    ("1.5 lakh ka budget", "constraints.budget.max", 150000),
+    ("2 crore budget", "constraints.budget.max", 20000000),
+    ("budget under 2000", "constraints.budget.max", 2000),
+    ("max 5k", "constraints.budget.max", 5000),
+    ("40k tak", "constraints.budget.max", 40000),
+    ("2000 se zyada nahi", "constraints.budget.max", 2000),
+    ("not more than 1 lakh", "constraints.budget.max", 100000),
 ])
 def test_money_forms(text: str, path: str, value: int) -> None:
     assert fields(extract(text).state).get(path) == value
@@ -168,8 +178,7 @@ def test_money_forms(text: str, path: str, value: int) -> None:
 def test_specs_are_not_mistaken_for_money() -> None:
     """"16GB" and "3 sessions" are numbers, not budgets."""
     got = fields(extract("i need at least 16GB RAM and 3 sessions").state)
-    assert "constraints.budget_inr" not in got
-    assert "constraints.budget_inr_max" not in got
+    assert "constraints.budget.max" not in got
 
 
 # --- 5. contact synonyms -------------------------------------------------------
@@ -178,8 +187,8 @@ def test_specs_are_not_mistaken_for_money() -> None:
 @pytest.mark.parametrize("text,mode", [
     ("i prefer email", "email"),
     ("prefer mail", "email"),
-    ("please contact me by phone", "call"),
-    ("prefer voice", "call"),
+    ("please contact me by phone", "phone"),
+    ("prefer voice", "phone"),
     ("reach me on whatsapp", "whatsapp"),
     ("prefer wa", "whatsapp"),
     ("contact me by sms", "sms"),
@@ -195,8 +204,11 @@ def test_two_dates_in_one_sentence() -> None:
     got = fields(extract(
         "ship it by Friday and the review call is on 12 March"
     ).state)
-    assert got["constraints.deadline"] == "friday"
-    assert got["constraints.additional_dates"] == ["12 March"]
+    # both are normalized to ISO now. "Friday" resolves against today, so the
+    # assertion is on the shape; the second date is checked on month and day,
+    # which is the part the sentence actually fixes.
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", got["constraints.deadline"])
+    assert [d[5:] for d in got["constraints.additional_dates"]] == ["03-12"]
 
 
 def test_iso_date_survives_intact() -> None:
@@ -222,7 +234,7 @@ def test_emoji_heavy_message() -> None:
     ).state)
     assert got["facts.name"] == "Meera"
     assert got["facts.city"] == "Jaipur"
-    assert got["constraints.budget_inr"] == 250000
+    assert got["constraints.budget.max"] == 250000
     assert got["preferences.contact_mode"] == "whatsapp"
 
 
@@ -236,7 +248,7 @@ def test_long_rambling_paragraph() -> None:
     ).state)
     assert got["facts.name"] == "Kabir"
     assert got["facts.city"] == "Hyderabad"
-    assert got["constraints.budget_inr"] == 75000
+    assert got["constraints.budget.max"] == 75000
     assert got["preferences.contact_mode"] == "email"
     assert "unresolved.delivery_window" in got
 

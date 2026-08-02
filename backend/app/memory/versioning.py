@@ -12,8 +12,22 @@ import json
 from typing import Any
 
 from app.memory.canonicalizer import NORM_VERSION, SCHEMA_VERSION, canonicalize
-from app.memory.conflict import _TRACKED_SECTIONS, detect_conflicts
+from app.memory.conflict import _TRACKED_SECTIONS, compare
 from app.memory.handle import generate_handle
+from app.schema import canonical as canon
+
+# Audit artifacts: preserved on the record, deliberately excluded from the
+# bytes that produce the handle.
+#
+# A conflict record carries the wall-clock instant it was noticed, so hashing
+# it made the handle a function of *when* a state was observed rather than of
+# what it says. The same input replayed a second later produced a different
+# handle, which is the one property a content-addressed store cannot give up.
+# `_unmapped` is excluded for the plainer reason that quarantine is not state.
+UNHASHED_KEYS = ("conflicts", "history", "_unmapped", "reinforced",
+                 "parent_handle", "state_version")
+
+STATE_VERSION = 2  # 1 = pre-registry raw keys; 2 = canonical paths
 
 
 def _item_key(value: Any) -> str:
@@ -36,33 +50,81 @@ def _merge_field(old_value: Any, new_value: Any) -> Any:
 
 
 def _merge(old_state: dict[str, Any], new_extracted: dict[str, Any]) -> dict[str, Any]:
-    """Merge new info over the old state (new values win); pure function."""
+    """Merge new info over the old state (new values win); pure function.
+
+    Merging walks canonical *paths* rather than a section's top-level keys, so
+    a nested field like `constraints.budget.max` replaces only itself and
+    leaves any sibling under `budget` intact.
+    """
     merged = copy.deepcopy(old_state)
 
     for section in _TRACKED_SECTIONS:
         new_section = new_extracted.get(section) or {}
         if not new_section:
             continue
-        target = merged.setdefault(section, {})
-        for key, new_value in new_section.items():
-            target[key] = _merge_field(target.get(key), new_value)
+        merged.setdefault(section, {})
+        for path in canon.leaf_paths_in(new_section, section):
+            new_value = canon.read_path(new_extracted, path)
+            canon.write_path(
+                merged, path, _merge_field(canon.read_path(merged, path), new_value)
+            )
 
     # unresolved: union by field name; drop entries now answered by a value
     resolved_fields = set()
     for section in _TRACKED_SECTIONS:
+        resolved_fields.update(canon.leaf_paths_in(merged.get(section), section))
         resolved_fields.update((merged.get(section) or {}).keys())
     unresolved = {
         e["field"]: e
         for e in (old_state.get("unresolved") or []) + (new_extracted.get("unresolved") or [])
-        if isinstance(e, dict) and e.get("field") not in resolved_fields
+        if isinstance(e, dict)
+        and e.get("field") not in resolved_fields
+        and f"{e.get('section', '')}.{e.get('field')}" not in resolved_fields
     }
     merged["unresolved"] = list(unresolved.values())
+
+    # quarantine accumulates so the registry can be grown from real misses
+    unmapped = {**(old_state.get("_unmapped") or {}), **(new_extracted.get("_unmapped") or {})}
+    unmapped.update(new_extracted.get("unmapped") or {})
+    if unmapped:
+        merged["_unmapped"] = unmapped
+    merged.pop("unmapped", None)
 
     # carry over prior conflicts; new ones are appended by evolve_state
     merged["conflicts"] = copy.deepcopy(old_state.get("conflicts") or []) + [
         c for c in (new_extracted.get("conflicts") or [])
     ]
+    merged["history"] = copy.deepcopy(old_state.get("history") or [])
+    merged["reinforced"] = dict(old_state.get("reinforced") or {})
     return merged
+
+
+def _seal(state: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    """Canonicalize, hash, then re-attach the audit artifacts alongside.
+
+    Splitting these is the point: the handle is a function of the facts only,
+    while conflicts, history and quarantine still ride on the record.
+    """
+    canonical = canonicalize({k: v for k, v in state.items() if k not in UNHASHED_KEYS})
+    handle = generate_handle(canonical, SCHEMA_VERSION, NORM_VERSION)
+
+    sealed = json.loads(canonical)
+    for key in UNHASHED_KEYS:
+        value = state.get(key)
+        if value not in (None, [], {}):
+            sealed[key] = value
+    sealed["state_version"] = STATE_VERSION
+    canon.assert_no_duplicate_paths(sealed)
+    return sealed, handle
+
+
+def initial_state(extracted: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    """The first state in a session — same sealing rules as every later one."""
+    state = dict(extracted)
+    # the extractor names its quarantine `unmapped`; on a record it is `_unmapped`
+    if unmapped := state.pop("unmapped", None):
+        state["_unmapped"] = unmapped
+    return _seal(state)
 
 
 def evolve_state(
@@ -73,17 +135,26 @@ def evolve_state(
     The returned state carries parent_handle = old_handle. The caller
     persists it as a new row; the old record is never touched.
     """
-    conflicts = detect_conflicts(old_state, new_extracted)
+    comparison = compare(old_state, new_extracted)
 
     new_state = _merge(old_state, new_extracted)
-    new_state["conflicts"].extend(conflicts)
+    new_state["conflicts"].extend(comparison.conflicts)
 
-    canonical = canonicalize(
-        {k: v for k, v in new_state.items() if k != "parent_handle"}
-    )
-    new_handle = generate_handle(canonical, SCHEMA_VERSION, NORM_VERSION)
+    # a value restated identically is confirmation, not contradiction
+    for path in comparison.reinforced:
+        new_state["reinforced"][path] = new_state["reinforced"].get(path, 1) + 1
 
-    # canonical form is the authoritative state content
-    new_state = json.loads(canonical)
-    new_state["parent_handle"] = old_handle
-    return new_state, new_handle
+    # a superseded value leaves active state entirely and survives only here,
+    # so nothing downstream can read two values for one path
+    for record in comparison.conflicts:
+        new_state["history"].append({
+            "field": record["field"],
+            "value": record["old"],
+            "superseded_by": record["new"],
+            "resolution": record["resolution"],
+            "ts": record["timestamp"],
+        })
+
+    sealed, new_handle = _seal(new_state)
+    sealed["parent_handle"] = old_handle
+    return sealed, new_handle

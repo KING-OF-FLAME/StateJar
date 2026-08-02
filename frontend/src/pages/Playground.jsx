@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import Markdown from '../components/Markdown'
 import { Link, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import AuditTimeline from '../components/AuditTimeline.jsx'
@@ -1210,7 +1211,9 @@ export default function Playground() {
                   <span className="pg-time">{fmtTime(m.ts)}</span>
                 </span>
                 <div className={`pg-bubble${m.error ? ' pg-error' : ''}`}>
-                  {m.content}
+                  {m.role === 'assistant' && !m.error
+                    ? <Markdown>{m.content}</Markdown>
+                    : m.content}
                   {m.error && m.payload && (
                     <button
                       className="retry-btn" disabled={locked}

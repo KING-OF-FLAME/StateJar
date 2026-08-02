@@ -30,7 +30,7 @@
   <tr>
     <td align="center"><b>70.7%</b><br><sub>tokens saved (measured)</sub></td>
     <td align="center"><b>10</b><br><sub>patent modules</sub></td>
-    <td align="center"><b>205</b><br><sub>tests passing</sub></td>
+    <td align="center"><b>570</b><br><sub>tests passing</sub></td>
     <td align="center"><b>SHA-256</b><br><sub>deterministic</sub></td>
   </tr>
 </table>

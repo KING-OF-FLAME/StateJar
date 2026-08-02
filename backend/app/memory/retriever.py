@@ -25,8 +25,18 @@ from fnmatch import fnmatch
 from typing import Any
 
 from app.config import get_settings
+from app.schema import canonical as canon
 
 logger = logging.getLogger(__name__)
+
+# Never disclosed to a model, whatever the query asks for.
+#
+# `conflicts` is the important one. A conflict record carries the value that
+# was *superseded* — so disclosing it handed the model the stale figure the
+# canonical layer had just finished removing from active state, by a second
+# route. It is a record of how state changed, not a thing the user told us.
+# Quarantine is not fact, and history is by definition not current.
+_NEVER_DISCLOSED = ("_unmapped", "history", "reinforced", "conflicts")
 
 # Intent → keywords that trigger it and the dotted field patterns it needs.
 # Patterns support fnmatch wildcards on the leaf (e.g. "constraints.budget*").
@@ -70,7 +80,6 @@ INTENT_FIELD_MAP: dict[str, dict[str, list[str]]] = {
             "preferences.brand_color",
             "constraints.no_ui_libs",
             "unresolved.stack*",
-            "conflicts.constraints*",
         ],
     },
 }
@@ -95,6 +104,42 @@ def classify_intents(query: str) -> list[str]:
 MODE_INTENT = "intent_map"        # the keyword map matched — the normal path
 MODE_SEMANTIC = "semantic_fallback"  # no intent, embeddings picked the fields
 MODE_BROAD = "broad_fallback"     # no intent and nothing semantic to add
+MODE_FULL = "full_state"          # small enough that selecting saves nothing
+
+# Phrases that ask for what StateJar already knows, rather than naming a
+# field. These are the whole point of the product, and the keyword map scored
+# them at zero.
+_RECALL_PHRASES = (
+    "saved preferences", "my preferences", "my usual", "as usual",
+    "like last time", "same as last time", "my details", "my usual details",
+    "on file", "you already know", "what you know about me", "my profile",
+    "my saved", "remember", "previous", "last time",
+)
+
+# What "my preferences" resolves to: the whole preference and constraint
+# namespaces, plus identity. Small, and cheap relative to being wrong.
+RECALL_FIELDS = ["preferences.*", "constraints.*", "facts.*",
+                 "unresolved.*", "goals.*", "decisions.*"]
+
+# Rough chars-per-token. The threshold itself is configurable — see
+# Settings.retriever_full_state_tokens for why it exists and what 0 means.
+_CHARS_PER_TOKEN = 4
+
+
+def _wants_everything_known(query: str) -> bool:
+    lowered = " ".join(query.lower().split())
+    return any(phrase in lowered for phrase in _RECALL_PHRASES)
+
+
+def _disclosable(full_state: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in full_state.items() if k not in _NEVER_DISCLOSED}
+
+
+def _is_small(full_state: dict[str, Any]) -> bool:
+    budget = get_settings().retriever_full_state_tokens * _CHARS_PER_TOKEN
+    if budget <= 0:
+        return False
+    return len(json.dumps(_disclosable(full_state), ensure_ascii=False)) <= budget
 
 SEMANTIC_MODEL_NAME = "all-MiniLM-L6-v2"
 SEMANTIC_THRESHOLD = 0.45
@@ -159,10 +204,10 @@ def _semantic_fields(query: str, full_state: dict[str, Any]) -> list[str] | None
         return None
 
     candidates = [
-        (f"{section}.{key}", f"{section}.{key}: {_render(field_value)}")
+        (path, f"{path}: {_render(canon.read_path(full_state, path))}")
         for section, value in full_state.items()
-        if isinstance(value, dict)
-        for key, field_value in value.items()
+        if isinstance(value, dict) and section not in _NEVER_DISCLOSED
+        for path in canon.leaf_paths_in(value, section)
     ]
     if not candidates:
         return []
@@ -182,6 +227,21 @@ def _semantic_fields(query: str, full_state: dict[str, Any]) -> list[str] | None
     # score first, then path, so equal scores resolve deterministically
     hits.sort(key=lambda item: (-item[1], item[0]))
     return [dotted for dotted, _ in hits[:SEMANTIC_TOP_K]]
+
+
+def _all_field_paths(full_state: dict[str, Any]) -> list[str]:
+    """Every canonical field in the state — the baseline the saving is against.
+
+    Stops at canonical leaves. Counting into a normalized value would score
+    `constraints.budget.max` as two fields (its amount and its currency) and
+    quietly inflate the token-saving figure.
+    """
+    return [
+        path
+        for section, value in full_state.items()
+        if isinstance(value, dict) and section not in _NEVER_DISCLOSED
+        for path in canon.leaf_paths_in(value, section)
+    ]
 
 
 def _leaf_paths(value: Any, prefix: str = "") -> list[str]:
@@ -206,33 +266,48 @@ def retrieve_minimum(query: str, full_state: dict[str, Any]) -> dict[str, Any]:
     for intent in intents:
         patterns.extend(INTENT_FIELD_MAP[intent]["fields"])
 
+    # "use my saved preferences" is a request for a whole namespace, not a
+    # keyword to score. It used to match nothing and return 3 of 12 fields.
+    if _wants_everything_known(query):
+        patterns.extend(RECALL_FIELDS)
+
     # The semantic layer is a fallback, never an override: it is consulted
     # only when the intent map found nothing, so an enabled model can never
     # change the subset for a query that already matched.
-    mode = MODE_INTENT if intents else MODE_BROAD
+    mode = MODE_INTENT if patterns else MODE_BROAD
     semantic_hits: set[str] = set()
-    if not intents and _semantic_enabled():
+    if not patterns and _semantic_enabled():
         matched = _semantic_fields(query, full_state)
         if matched:
             semantic_hits = set(matched)
             mode = MODE_SEMANTIC
 
+    # Below this size there is nothing worth saving, and a wrong answer costs
+    # far more than the handful of tokens a narrower subset would have saved.
+    # Selective retrieval is an optimisation; it must never be the reason an
+    # answer is wrong. Above the threshold, selection engages as before.
+    if _is_small(full_state):
+        patterns = ["*"]
+        mode = MODE_FULL
+
     subset: dict[str, Any] = {}
     subset_keys: list[str] = []
 
-    # dict sections (facts/preferences/decisions/constraints/goals)
+    # dict sections (facts/preferences/decisions/constraints/goals). Selection
+    # is per canonical *path*: a money or date value is one field, not a
+    # sub-object to be disclosed a piece at a time.
     for section, value in full_state.items():
-        if not isinstance(value, dict):
+        if not isinstance(value, dict) or section in _NEVER_DISCLOSED:
             continue
-        for key, field_value in value.items():
-            dotted = f"{section}.{key}"
+        for dotted in canon.leaf_paths_in(value, section):
             if any(fnmatch(dotted, pat) for pat in patterns) or dotted in semantic_hits:
-                subset.setdefault(section, {})[key] = field_value
+                canon.write_path(subset, dotted, canon.read_path(full_state, dotted))
                 subset_keys.append(dotted)
 
-    # unresolved / conflicts: keep entries whose `field` relates to the subset
+    # unresolved: keep entries whose `field` relates to the subset. Conflicts
+    # are deliberately absent — see _NEVER_DISCLOSED.
     selected_leaves = {k.split(".", 1)[1] for k in subset_keys}
-    for section in ("unresolved", "conflicts"):
+    for section in ("unresolved",):
         entries = full_state.get(section) or []
         kept = []
         for entry in entries:
@@ -244,17 +319,18 @@ def retrieve_minimum(query: str, full_state: dict[str, Any]) -> dict[str, Any]:
         if kept:
             subset[section] = kept
 
-    full_leaves = _leaf_paths(
-        {k: v for k, v in full_state.items() if k not in ("unresolved", "conflicts")}
-    )
-    n_full = len(full_leaves) + sum(
-        len(full_state.get(s) or []) for s in ("unresolved", "conflicts")
-    )
+    full_leaves = _all_field_paths(full_state)
+    n_full = len(full_leaves) + len(full_state.get("unresolved") or [])
     fields_dropped = n_full - len(subset_keys)
 
-    full_json = json.dumps(full_state, ensure_ascii=False)
+    # Measured against what a naive client would have sent — the disclosable
+    # state — rather than the whole record. Reporting a saving against bytes
+    # that were never eligible for disclosure would flatter the number.
+    # This is computed after selection and never feeds back into it.
+    full_json = json.dumps(_disclosable(full_state), ensure_ascii=False)
     subset_json = json.dumps(subset, ensure_ascii=False)
     saved_pct = round(100 * (1 - len(subset_json) / len(full_json)), 1) if full_json else 0.0
+    saved_pct = max(saved_pct, 0.0)
 
     return {
         "subset": subset,

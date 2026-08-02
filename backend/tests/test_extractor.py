@@ -11,7 +11,7 @@ def test_example_from_spec() -> None:
     state = extract_state(text)
     assert state.facts["name"] == "Ayaan"
     assert state.preferences["contact_mode"] == "email"
-    assert state.constraints["budget_inr_max"] == 2000
+    assert state.constraints["budget"]["max"] == {"value": 2000, "currency": "INR"}
     assert any(
         u.field == "delivery_time" and u.reason == "not provided"
         for u in state.unresolved
@@ -22,14 +22,14 @@ def test_decision_and_deadline() -> None:
     text = "I'll go with the blue variant. Deadline is Friday."
     state = extract_state(text)
     assert state.decisions["choice"] == "blue variant"
-    assert state.constraints["deadline"].lower() == "friday"
+    assert state.constraints["deadline"]["raw"].lower() == "friday"
 
 
 def test_budget_rs_with_commas_and_goal() -> None:
     text = "I want to renovate my kitchen. Max Rs 1,50,000."
     state = extract_state(text)
     assert state.goals["primary"] == "renovate my kitchen"
-    assert state.constraints["budget_inr_max"] == 150000
+    assert state.constraints["budget"]["max"] == {"value": 150000, "currency": "INR"}
 
 
 def test_whatsapp_preference_and_unsure() -> None:
@@ -99,5 +99,5 @@ def test_build_brief_does_not_disturb_the_older_rules() -> None:
     old = extract_state("My name is Ayaan, budget under ₹2000. I prefer email.")
     assert old.facts == {"name": "Ayaan"}
     assert old.preferences == {"contact_mode": "email"}
-    assert old.constraints == {"budget_inr_max": 2000}
+    assert old.constraints == {"budget": {"max": {"value": 2000, "currency": "INR"}}}
     assert old.decisions == {}

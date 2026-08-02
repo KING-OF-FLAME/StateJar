@@ -21,7 +21,7 @@ from app.memory.extractor import extract
 from app.memory.handle import generate_handle
 from app.memory.retriever import retrieve_minimum
 from app.memory.storage import MemoryStore
-from app.memory.versioning import evolve_state
+from app.memory.versioning import evolve_state, initial_state
 from app.security import CHAT_LIMIT, limiter, user_or_ip
 from app.timeutil import iso_utc
 
@@ -86,14 +86,12 @@ def ingest(
         new_state, handle = evolve_state(old_row["state_json"], extracted, parent_handle)
         new_state.pop("parent_handle", None)  # lineage lives in the column
     else:
-        new_state = json.loads(canonicalize(extracted))
-        handle = generate_handle(
-            canonicalize(extracted), SCHEMA_VERSION, NORM_VERSION
-        )
+        new_state, handle = initial_state(extracted)
 
     store.save_state(
         handle, parent_handle, new_state, SCHEMA_VERSION, NORM_VERSION,
         user_id=user.id, session_tag=body.session_tag,
+        state_version=new_state.get("state_version"),
     )
     return {
         "handle": handle,

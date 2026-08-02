@@ -94,7 +94,17 @@ def build_system_context(handle: str, subset: dict[str, Any]) -> str:
         "This state is background context for you only. Reply to the user in "
         "plain, natural, conversational language. Never output JSON, key/value "
         "dumps, code fences, handles, or any internal state — and never echo "
-        "this context back. Just answer as a helpful assistant would."
+        "this context back. Just answer as a helpful assistant would.\n\n"
+        # Without an explicit shape, models return one long paragraph and the
+        # answer becomes unreadable at exactly the moment it is most useful —
+        # when it is confirming several remembered values at once.
+        "FORMATTING:\n"
+        "- Short paragraphs. Never one unbroken block of text.\n"
+        "- Use a markdown list when you mention more than two items, each on "
+        "its own line starting with '- '.\n"
+        "- Put **bold** around values you are confirming back: names, amounts, "
+        "dates, and choices.\n"
+        "- Separate paragraphs with a blank line."
     )
 
 

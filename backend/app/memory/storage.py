@@ -30,6 +30,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.engine import Engine
 
+from app.schema import canonical as canon
+
 FORBIDDEN_KEYS = {"raw_transcript", "chat_history"}
 
 metadata = MetaData()
@@ -46,6 +48,10 @@ memory_states = Table(
     Column("user_id", Integer, nullable=False),
     Column("session_tag", String(100), nullable=True),
     Column("created_at", DateTime, nullable=False),
+    # 1 = raw extractor keys (pre-registry), 2 = canonical paths. Rows are
+    # migrated forward by reading, never by rewriting: a handle addresses the
+    # bytes that produced it, so an in-place edit would break that promise.
+    Column("state_version", Integer, nullable=False, server_default="1"),
     UniqueConstraint("handle", "user_id", "session_tag", name="uq_memory_states_scope"),
 )
 
@@ -84,6 +90,7 @@ class MemoryStore:
         norm_version: str,
         user_id: int,
         session_tag: str | None = None,
+        state_version: int | None = None,
     ) -> bool:
         """Insert a state row; return True if inserted, False if it already existed.
 
@@ -91,6 +98,11 @@ class MemoryStore:
         dedup, so collisions within that scope are ignored rather than raised.
         """
         _assert_no_transcript(state_json)
+        # The invariant this whole layer exists to hold. If two aliases for one
+        # concept are both live, a write bypassed the canonical registry — and
+        # that is precisely how a superseded budget stayed in state and got
+        # shipped to the model. Fail here rather than persist it.
+        canon.assert_no_duplicate_paths(state_json)
 
         if self._engine.dialect.name == "mysql":
             stmt = memory_states.insert().prefix_with("IGNORE")
@@ -108,6 +120,7 @@ class MemoryStore:
                     user_id=user_id,
                     session_tag=session_tag,
                     created_at=datetime.now(timezone.utc),
+                    state_version=state_version or state_json.get("state_version", 1),
                 )
             )
         return bool(result.rowcount)

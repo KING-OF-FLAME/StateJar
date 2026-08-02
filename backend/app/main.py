@@ -95,6 +95,19 @@ def _ensure_tables() -> None:
                 with engine.begin() as conn:
                     for statement in missing:
                         conn.execute(statement)
+
+        # migration 006 — state_version. Rows written before the canonical
+        # registry hold raw extractor keys; they default to 1 and are read
+        # forward rather than rewritten, because rewriting state_json would
+        # invalidate the handle that addresses it.
+        if "memory_states" in inspector.get_table_names():
+            columns = {c["name"] for c in inspector.get_columns("memory_states")}
+            if "state_version" not in columns:
+                with engine.begin() as conn:
+                    conn.execute(text(
+                        "ALTER TABLE memory_states "
+                        "ADD COLUMN state_version INT NOT NULL DEFAULT 1"
+                    ))
     except Exception:  # noqa: BLE001 — DB down at boot must not kill the app
         pass
 

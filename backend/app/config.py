@@ -41,6 +41,15 @@ class Settings(BaseSettings):
     # query the keyword intent map does not recognise falls back to embedding
     # similarity. Read path only — it cannot affect a handle.
     retriever_semantic: bool = False
+    # Below this many tokens of state, retrieval returns everything rather
+    # than selecting. Selection is an optimisation and must never be the
+    # reason an answer is wrong — under a few hundred tokens there is nothing
+    # meaningful to save anyway.
+    #
+    # Set to 0 to make selective retrieval always engage. That maximises the
+    # headline token-saving figure but reintroduces the risk of answering
+    # from a subset that is missing a field the query needed.
+    retriever_full_state_tokens: int = 800
     # --- provider endpoints ---
     # Overridable so a deployment can route through a proxy or gateway, and so
     # tests can point a provider at a local stub instead of the real host.

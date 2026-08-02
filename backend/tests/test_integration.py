@@ -17,6 +17,7 @@ from sqlalchemy.pool import StaticPool
 
 from tests.conftest import fake_key
 from app.auth.models import auth_metadata
+from app.config import get_settings
 from app.database import get_db
 from app.llm.gateway import llm_metadata
 from app.llm.providers import OpenRouterProvider
@@ -72,7 +73,10 @@ def test_all_routes_require_jwt(client: TestClient) -> None:
 
 
 @respx.mock
-def test_full_pipeline_end_to_end(client: TestClient, headers: dict[str, str]) -> None:
+def test_full_pipeline_end_to_end(
+    client: TestClient, headers: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # 1. ingest session 1
     r = client.post(
         "/api/v1/memory/ingest",
@@ -86,7 +90,7 @@ def test_full_pipeline_end_to_end(client: TestClient, headers: dict[str, str]) -
     assert ingest1["parent_handle"] is None
     assert ingest1["state"]["facts"]["name"] == "Ayaan"
     assert ingest1["state"]["preferences"]["contact_mode"] == "email"
-    assert ingest1["state"]["constraints"]["budget_inr_max"] == 2000
+    assert ingest1["state"]["constraints"]["budget"]["max"]["value"] == 2000
 
     # 2. second ingest evolves state (budget change → conflict, new handle)
     r = client.post(
@@ -98,8 +102,8 @@ def test_full_pipeline_end_to_end(client: TestClient, headers: dict[str, str]) -
     h2 = ingest2["handle"]
     assert h2 != h1
     assert ingest2["parent_handle"] == h1
-    assert ingest2["state"]["constraints"]["budget_inr_max"] == 2500
-    assert any(c["field"] == "constraints.budget_inr_max" for c in ingest2["conflicts"])
+    assert ingest2["state"]["constraints"]["budget"]["max"]["value"] == 2500
+    assert any(c["field"] == "constraints.budget.max" for c in ingest2["conflicts"])
 
     # 3. version chain intact, old state retrievable
     versions = client.get(
@@ -107,16 +111,40 @@ def test_full_pipeline_end_to_end(client: TestClient, headers: dict[str, str]) -
     ).json()["versions"]
     assert versions == [h1, h2]
 
-    # 4. query returns minimal subset only
+    # 4. query returns the right subset, and never the superseded value
+    #
+    # With the shipped default a state this small is returned whole: selecting
+    # from a few hundred tokens saves nothing worth being wrong for. What must
+    # hold either way is that the *stale* budget never reaches the caller — the
+    # conflict record holds it, and conflicts are audit-only.
     q = client.post(
         "/api/v1/memory/query",
         json={"session_tag": "session-1", "query": "Book my delivery"},
         headers=headers,
     ).json()
     assert q["handle_used"] == h2
-    assert q["subset"]["preferences"] == {"contact_mode": "email"}
-    assert q["subset"]["constraints"] == {"budget_inr_max": 2500}
-    assert "facts" not in q["subset"]  # name not disclosed for a booking query
+    assert q["subset"]["preferences"]["contact_mode"] == "email"
+    assert q["subset"]["constraints"]["budget"] == {
+        "max": {"value": 2500, "currency": "INR"}
+    }
+    assert q["metadata"]["retrieval_mode"] == "full_state"
+    assert "conflicts" not in q["subset"]
+    assert "2000" not in json.dumps(q["subset"])   # the superseded figure
+
+    # and with the size fallback off, selection still narrows to the intent
+    get_settings.cache_clear()
+    monkeypatch.setenv("RETRIEVER_FULL_STATE_TOKENS", "0")
+    try:
+        narrow = client.post(
+            "/api/v1/memory/query",
+            json={"session_tag": "session-1", "query": "Book my delivery"},
+            headers=headers,
+        ).json()
+        assert narrow["metadata"]["retrieval_mode"] == "intent_map"
+        assert "facts" not in narrow["subset"]   # name not needed to book
+    finally:
+        monkeypatch.delenv("RETRIEVER_FULL_STATE_TOKENS", raising=False)
+        get_settings.cache_clear()
 
     # 5. save provider key + chat (mocked OpenRouter, cross-session: new "session")
     client.post(
@@ -145,7 +173,7 @@ def test_full_pipeline_end_to_end(client: TestClient, headers: dict[str, str]) -
     assert chat_body["response"].startswith("Booked!")
     assert chat_body["handle_used"] == h2
     assert set(chat_body["subset_keys"]) >= {
-        "preferences.contact_mode", "constraints.budget_inr_max",
+        "preferences.contact_mode", "constraints.budget.max",
     }
 
     # 6. LLM received ONLY the subset — never the raw transcript
@@ -155,7 +183,12 @@ def test_full_pipeline_end_to_end(client: TestClient, headers: dict[str, str]) -
     assert "contact_mode" in system_msg
     assert INGEST_TEXT not in json.dumps(sent)          # no full transcript
     assert "My name is Ayaan" not in json.dumps(sent)   # no raw text fragments
-    assert "Ayaan" not in system_msg                    # facts not in booking subset
+    # The name IS disclosed here, and should be: the query said "my usual
+    # preferences", which is a request for what StateJar has on file. What
+    # must never appear is the sentence the user typed to establish it — the
+    # claim is no chat replay, not no facts.
+    assert '"name": "Ayaan"' in system_msg
+    assert "2000" not in system_msg                     # the superseded budget
 
     # 7. audit row exists and matches
     trail = client.get("/api/v1/audit", headers=headers).json()["entries"]

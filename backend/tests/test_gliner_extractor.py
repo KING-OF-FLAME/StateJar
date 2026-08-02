@@ -13,6 +13,7 @@ import pytest
 from app.config import Settings, get_settings
 from app.memory import extractor
 from app.memory.canonicalizer import NORM_VERSION, SCHEMA_VERSION, canonicalize
+from app.schema import canonical as canon
 from app.memory.extractor import (
     GLINER_SCHEMA,
     SOURCE_GLINER,
@@ -176,7 +177,7 @@ def test_gliner_never_overwrites_a_rule_value(monkeypatch: pytest.MonkeyPatch) -
 
     assert result.sources == [SOURCE_RULES, SOURCE_GLINER]
     assert result.state.facts["name"] == "Ayaan"                  # rule wins
-    assert result.state.constraints["budget_inr_max"] == 2000     # rule wins
+    assert result.state.constraints["budget"]["max"]["value"] == 2000   # rule wins
     assert "budget_inr" not in result.state.constraints           # no second key
     assert result.state.preferences["contact_mode"] == "email"    # rule wins
     assert result.state.decisions["choice"] == "express shipping"  # gap filled
@@ -184,13 +185,18 @@ def test_gliner_never_overwrites_a_rule_value(monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_every_schema_label_has_a_destination() -> None:
-    """A label the model is prompted with but nothing maps is a silent drop."""
-    for label, target in GLINER_SCHEMA.items():
-        assert isinstance(target, tuple) and len(target) == 2, label
-        section, key = target
-        assert section in ("facts", "preferences", "decisions", "constraints",
-                           "goals", "unresolved"), label
-        assert key
+    """A label the model is prompted with but nothing maps is a silent drop.
+
+    The schema is generated from the registry now, so this also asserts the
+    generation itself: every label must land on a path the registry owns, or
+    tier 2 would be asked for entities that can never be stored.
+    """
+    for label, path in GLINER_SCHEMA.items():
+        assert isinstance(path, str) and "." in path, label
+        section = path.split(".", 1)[0]
+        assert section in (*canon.ACTIVE_SECTIONS, "unresolved"), label
+        if section != "unresolved":
+            assert canon.resolve(path) is not None, label
 
 
 def test_back_compat_shim_returns_a_list() -> None:

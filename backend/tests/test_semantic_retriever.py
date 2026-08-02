@@ -30,7 +30,7 @@ AYAAN_STATE: dict[str, Any] = {
     "facts": {"name": "Ayaan", "city": "Pune"},
     "preferences": {"contact_mode": "email", "theme": "dark"},
     "decisions": {"choice": "blue variant"},
-    "constraints": {"budget_inr_max": 2000},
+    "constraints": {"budget": {"max": {"value": 2000, "currency": "INR"}}},
     "goals": {"primary": "renovate kitchen"},
     "unresolved": [{"field": "delivery_time", "reason": "not provided"}],
     "conflicts": [],
@@ -59,8 +59,14 @@ class FakeEmbedder:
 
 
 @pytest.fixture(autouse=True)
-def _clean_env() -> Generator[None, None, None]:
-    """Settings are cached and the model is a singleton — reset both."""
+def _clean_env(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
+    """Settings are cached and the model is a singleton — reset both.
+
+    The full-state size fallback is switched off: it short-circuits selection
+    before the semantic layer is ever consulted, so leaving it on would make
+    every test here pass without exercising the thing it names.
+    """
+    monkeypatch.setenv("RETRIEVER_FULL_STATE_TOKENS", "0")
     get_settings.cache_clear()
     retriever._semantic_state.update(attempted=False, model=None)
     yield
@@ -161,29 +167,29 @@ def test_matched_intent_is_identical_in_both_modes(
         # every field scores 0.99 — if the layer ran, the subset would balloon
         _use_semantic(monkeypatch, {k: 0.99 for k in (
             "facts.name", "facts.city", "preferences.contact_mode",
-            "preferences.theme", "decisions.choice", "constraints.budget_inr_max",
+            "preferences.theme", "decisions.choice", "constraints.budget.max",
             "goals.primary",
         )})
     else:
         _intent_only(monkeypatch)
 
-    result = retrieve_minimum("Book my delivery with my usual preferences", AYAAN_STATE)
+    result = retrieve_minimum("Book my delivery", AYAAN_STATE)
     assert result["metadata"]["retrieval_mode"] == MODE_INTENT
     assert result["subset"] == {
         "preferences": {"contact_mode": "email"},
-        "constraints": {"budget_inr_max": 2000},
+        "constraints": {"budget": {"max": {"value": 2000, "currency": "INR"}}},
         "unresolved": [{"field": "delivery_time", "reason": "not provided"}],
     }
 
 
 def test_semantic_fills_an_unmatched_query(monkeypatch: pytest.MonkeyPatch) -> None:
     """"How do I reach out about money?" hits no keyword, but means budget."""
-    _use_semantic(monkeypatch, {"constraints.budget_inr_max": 0.71, "facts.city": 0.12})
+    _use_semantic(monkeypatch, {"constraints.budget.max": 0.71, "facts.city": 0.12})
     result = retrieve_minimum("What can I spend on this?", AYAAN_STATE)
 
     assert result["metadata"]["retrieval_mode"] == MODE_SEMANTIC
-    assert result["subset"] == {"constraints": {"budget_inr_max": 2000}}
-    assert result["metadata"]["subset_keys"] == ["constraints.budget_inr_max"]
+    assert result["subset"] == {"constraints": {"budget": {"max": {"value": 2000, "currency": "INR"}}}}
+    assert result["metadata"]["subset_keys"] == ["constraints.budget.max"]
 
 
 def test_threshold_is_exclusive(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -202,7 +208,7 @@ def test_top_five_cap(monkeypatch: pytest.MonkeyPatch) -> None:
     _use_semantic(monkeypatch, {
         "facts.name": 0.90, "facts.city": 0.89, "preferences.contact_mode": 0.88,
         "preferences.theme": 0.87, "decisions.choice": 0.86,
-        "constraints.budget_inr_max": 0.85, "goals.primary": 0.84,
+        "constraints.budget.max": 0.85, "goals.primary": 0.84,
     })
     result = retrieve_minimum("zzz unmatched query", AYAAN_STATE)
 
@@ -246,7 +252,7 @@ def test_embedded_text_is_path_plus_value(monkeypatch: pytest.MonkeyPatch) -> No
     sent = fake.calls[0]
     assert sent[0] == "zzz unmatched query"
     assert "facts.name: Ayaan" in sent
-    assert "constraints.budget_inr_max: 2000" in sent
+    assert 'constraints.budget.max: {"value": 2000, "currency": "INR"}' in sent
     # list sections are not embedded; they ride along via relatedness
     assert not any(s.startswith("unresolved") for s in sent)
 
@@ -277,7 +283,7 @@ def test_handle_is_byte_identical_with_semantic_on_and_off(
     handle_off = generate_handle(canonical_off, SCHEMA_VERSION, NORM_VERSION)
 
     _use_semantic(monkeypatch, {
-        "facts.name": 0.91, "constraints.budget_inr_max": 0.88,
+        "facts.name": 0.91, "constraints.budget.max": 0.88,
         "preferences.contact_mode": 0.77,
     })
     state_on = extract_state(text).model_dump()

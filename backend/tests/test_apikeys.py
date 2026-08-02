@@ -130,7 +130,7 @@ def test_api_key_authenticates_the_data_plane(client: TestClient) -> None:
         QUERY, json={"session_tag": "s1", "query": "what is my budget?"}, headers=auth
     )
     assert query.status_code == 200
-    assert query.json()["subset"]["constraints"]["budget_inr_max"] == 2000
+    assert query.json()["subset"]["constraints"]["budget"]["max"]["value"] == 2000
 
     assert client.get(USAGE, headers=auth).status_code == 200
 
@@ -298,7 +298,10 @@ def test_usage_token_estimate_grows_with_disclosures(client: TestClient) -> None
     after_two = client.get(USAGE, headers=headers).json()["est_tokens_saved"]
 
     assert after_one > 0
-    assert after_two == 2 * after_one  # same disclosure, summed
+    # Same disclosure twice, so the saving doubles. The estimate floors
+    # chars//4 once over the summed total, so the doubled figure can land one
+    # token above 2x the individually-floored one.
+    assert after_two - 2 * after_one in (0, 1)
 
 
 def test_usage_requires_a_credential(client: TestClient) -> None:

@@ -15,7 +15,7 @@ from app.timeutil import iso_utc
 STATE = {
     "facts": {"name": "Ayaan"},
     "preferences": {"contact_mode": "email"},
-    "constraints": {"budget_inr_max": 2000},
+    "constraints": {"budget": {"max": {"value": 2000, "currency": "INR"}}},
     "unresolved": [{"field": "delivery_time", "reason": "not provided"}],
 }
 HANDLE = "shm_" + "a" * 40
@@ -36,7 +36,7 @@ def _log(logger: AuditLogger, request_id: str = "req-1", **overrides) -> None:
         request_id=request_id,
         user_id=1,
         handle_used=HANDLE,
-        subset_keys=["preferences.contact_mode", "constraints.budget_inr_max",
+        subset_keys=["preferences.contact_mode", "constraints.budget.max",
                      "unresolved.delivery_time"],
         provider="anthropic",
         model="claude-sonnet-4-6",
@@ -80,7 +80,7 @@ def test_replay_reconstructs_exact_subset(logger: AuditLogger) -> None:
     assert result["handle_used"] == HANDLE
     assert result["subset"] == {
         "preferences": {"contact_mode": "email"},
-        "constraints": {"budget_inr_max": 2000},
+        "constraints": {"budget": {"max": {"value": 2000, "currency": "INR"}}},
         "unresolved": [{"field": "delivery_time", "reason": "not provided"}],
     }
     assert result["provider"] == "anthropic"
