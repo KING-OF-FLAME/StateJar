@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -80,10 +81,52 @@ def decrypt_key(blob: bytes) -> str:
 
 
 def build_system_context(handle: str, subset: dict[str, Any]) -> str:
-    """Format the minimal retrieved subset for the system prompt."""
+    """Format the minimal retrieved subset for the system prompt.
+
+    The instruction block matters: handed a JSON blob and nothing else, models
+    reasonably infer they should answer in JSON, and production showed replies
+    like {"action":"update","handle":…} rendered straight into the chat
+    bubble. The state is context, not a response format.
+    """
     subset_json = json.dumps(subset, ensure_ascii=False, sort_keys=True)
     return (
-        f"Known user state (retrieved via StateJar handle {handle}): {subset_json}"
+        f"Known user state (retrieved via StateJar handle {handle}): {subset_json}\n\n"
+        "This state is background context for you only. Reply to the user in "
+        "plain, natural, conversational language. Never output JSON, key/value "
+        "dumps, code fences, handles, or any internal state — and never echo "
+        "this context back. Just answer as a helpful assistant would."
+    )
+
+
+# A reply that is really a state dump: the model answered in the context's
+# format instead of talking to the user.
+_STATE_KEYS = ("handle", "state", "action", "subset", "handle_used")
+
+
+def clean_reply(text: str) -> str:
+    """Replace a JSON state dump with something a person can read.
+
+    Belt and braces to the system prompt: the prompt asks for prose, this
+    catches the case where a model ignores it. Ordinary prose is returned
+    untouched, including prose that merely mentions JSON.
+    """
+    candidate = (text or "").strip()
+    if not candidate:
+        return candidate
+    stripped = candidate
+    if stripped.startswith("```"):
+        stripped = re.sub(r"^```(?:json)?|```$", "", stripped, flags=re.MULTILINE).strip()
+    if not (stripped.startswith("{") and stripped.endswith("}")):
+        return candidate
+    try:
+        parsed = json.loads(stripped)
+    except (json.JSONDecodeError, ValueError):
+        return candidate
+    if not isinstance(parsed, dict) or not any(k in parsed for k in _STATE_KEYS):
+        return candidate
+    return (
+        "Got it — I've updated what I know about you. Your memory state and the "
+        "exact fields I used are in the panel on the right."
     )
 
 

@@ -133,8 +133,45 @@ function diffPaths(oldS, newS, prefix = '') {
   return out
 }
 
+/* ---------- extraction tiers ---------- */
+/* Which tier caught which field. Rules are deterministic and always run;
+   the neural tiers only fill what rules missed, so a state made entirely of
+   coral chips is a state whose identity is fully reproducible. */
+const TIER_META = {
+  rules: { label: 'rules', hint: 'Deterministic patterns — same answer on every machine' },
+  gliner2: { label: 'GLiNER2', hint: 'Schema-guided neural extraction, for what the patterns missed' },
+  llm: { label: 'LLM', hint: 'Strict-JSON extraction via your own provider key, messy input only' },
+}
+
+function TierChips({ sources, origins }) {
+  const tiers = Array.isArray(sources) ? sources : sources ? [sources] : []
+  if (!tiers.length) return null
+  const counts = {}
+  for (const tier of Object.values(origins || {})) {
+    counts[tier] = (counts[tier] || 0) + 1
+  }
+  return (
+    <div className="tier-chips" role="group" aria-label="Extraction tiers">
+      {tiers.map((tier) => {
+        const meta = TIER_META[tier] || { label: tier, hint: tier }
+        return (
+          <span
+            key={tier}
+            className={`tier-chip tier-${tier}`}
+            title={counts[tier] ? `${meta.hint} — ${counts[tier]} field${counts[tier] === 1 ? '' : 's'}` : meta.hint}
+          >
+            <span className="tier-dot" aria-hidden="true" />
+            {meta.label}
+            {counts[tier] ? <span className="tier-count">{counts[tier]}</span> : null}
+          </span>
+        )
+      })}
+    </div>
+  )
+}
+
 /* ---------- JSON tree ---------- */
-function JsonNode({ k, value, depth = 0, coral = false, path = '', changed }) {
+function JsonNode({ k, value, depth = 0, coral = false, path = '', changed, origins }) {
   const pad = { paddingLeft: depth ? 16 : 0 }
   if (value !== null && typeof value === 'object') {
     const entries = Array.isArray(value) ? value.map((v, i) => [i, v]) : Object.entries(value)
@@ -150,6 +187,7 @@ function JsonNode({ k, value, depth = 0, coral = false, path = '', changed }) {
               coral={coral || ck === 'conflicts'}
               path={path ? `${path}.${ck}` : `${ck}`}
               changed={changed}
+              origins={origins}
             />
           ))
         )}
@@ -160,15 +198,23 @@ function JsonNode({ k, value, depth = 0, coral = false, path = '', changed }) {
   // a numeric key means this is an item in a list (e.g. constraints.requirements);
   // a bullet reads better than "0:" for a collected value
   const isListItem = typeof k === 'number'
+  // unresolved entries are keyed by their field name, not their array index
+  const origin = origins?.[path]
+  const meta = origin ? TIER_META[origin] : null
   return (
-    <div style={pad} className={`${coral ? 'jt-coral' : ''}${isChanged ? ' jt-changed' : ''}`}>
+    <div
+      style={pad}
+      className={`${coral ? 'jt-coral' : ''}${isChanged ? ' jt-changed' : ''}`}
+      title={meta ? `${path} — found by ${meta.label}` : undefined}
+    >
       <span className={isListItem ? 'jt-bullet' : 'jt-key'}>{isListItem ? '–' : k}</span>{' '}
       <span className={typeof value === 'number' ? 'jt-num' : 'jt-str'}>{JSON.stringify(value)}</span>
+      {origin && <span className={`jt-origin tier-${origin}`} aria-hidden="true" />}
     </div>
   )
 }
 
-function StateTree({ state, changed }) {
+function StateTree({ state, changed, origins }) {
   if (!state) {
     return (
       <p className="empty-note">
@@ -180,7 +226,10 @@ function StateTree({ state, changed }) {
   return (
     <div className="json-tree mono">
       {order.filter((k) => state[k] !== undefined).map((k) => (
-        <JsonNode key={k} k={k} value={state[k]} coral={k === 'conflicts'} path={k} changed={changed} />
+        <JsonNode
+          key={k} k={k} value={state[k]} coral={k === 'conflicts'}
+          path={k} changed={changed} origins={origins}
+        />
       ))}
     </div>
   )
@@ -350,7 +399,8 @@ export default function Playground() {
   const [tab, setTab] = useState(0)
   const [state, setState] = useState(null)          // current memory state
   const [handle, setHandle] = useState(null)
-  const [extractionSource, setExtractionSource] = useState(null) // "rules" | "gliner+rules"
+  const [extractionSource, setExtractionSource] = useState(null)  // ["rules","gliner2",…]
+  const [extractionOrigins, setExtractionOrigins] = useState({})  // "facts.name" -> tier
   const [changed, setChanged] = useState(null)      // dotted paths updated by last ingest
   const [copied, setCopied] = useState(false)
   const [retrieved, setRetrieved] = useState(null)  // last query subset + metadata
@@ -468,6 +518,7 @@ export default function Playground() {
   const applyIngest = (ing) => {
     setChanged(new Set(diffPaths(stateRef.current, ing.state)))
     if (ing.extraction_source) setExtractionSource(ing.extraction_source)
+    if (ing.extraction_origins) setExtractionOrigins(ing.extraction_origins)
     stateRef.current = ing.state
     setState(ing.state)
     setHandle(ing.handle)
@@ -1149,11 +1200,7 @@ export default function Playground() {
                 </>
               ) : (
                 <>
-                  {extractionSource && (
-                    <span className="chip chip-meta mono" title="Which extraction layer produced this state">
-                      extraction: {extractionSource}
-                    </span>
-                  )}
+                  <TierChips sources={extractionSource} origins={extractionOrigins} />
                   {handle && (
                     <p className="pg-handle-line mono">
                       handle: <span className="hl-accent">{handle}</span>
@@ -1167,7 +1214,7 @@ export default function Playground() {
                       </button>
                     </p>
                   )}
-                  <StateTree state={state} changed={changed} />
+                  <StateTree state={state} changed={changed} origins={extractionOrigins} />
                 </>
               )}
             </>

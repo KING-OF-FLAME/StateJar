@@ -15,6 +15,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from tests.conftest import fake_key
 from app.auth.models import auth_metadata
 from app.database import get_db
 from app.llm.gateway import llm_metadata
@@ -120,7 +121,7 @@ def test_full_pipeline_end_to_end(client: TestClient, headers: dict[str, str]) -
     # 5. save provider key + chat (mocked OpenRouter, cross-session: new "session")
     client.post(
         "/api/v1/keys/provider",
-        json={"provider": "openrouter", "api_key": "sk-or-v1-testkey9999"},
+        json={"provider": "openrouter", "api_key": fake_key("or-9999")},
         headers=headers,
     )
     route = respx.post(OpenRouterProvider.BASE_URL).mock(
@@ -208,7 +209,7 @@ def test_chat_upstream_5xx_is_502(client: TestClient, headers: dict[str, str]) -
     )
     client.post(
         "/api/v1/keys/provider",
-        json={"provider": "openrouter", "api_key": "sk-or-v1-testkey0000"},
+        json={"provider": "openrouter", "api_key": fake_key("or-0000")},
         headers=headers,
     )
     respx.post(OpenRouterProvider.BASE_URL).mock(
@@ -234,7 +235,7 @@ def test_chat_upstream_timeout_is_502(client: TestClient, headers: dict[str, str
     )
     client.post(
         "/api/v1/keys/provider",
-        json={"provider": "openrouter", "api_key": "sk-or-v1-testkey0001"},
+        json={"provider": "openrouter", "api_key": fake_key("or-0001")},
         headers=headers,
     )
     respx.post(OpenRouterProvider.BASE_URL).mock(

@@ -100,9 +100,9 @@ def test_secret_key_names_refused(logger: AuditLogger) -> None:
 
 def test_secret_like_values_refused(logger: AuditLogger) -> None:
     with pytest.raises(SecretInAuditError):
-        _log(logger, provider="sk-ant-abc123def456")
+        _log(logger, provider="sk-" + "ant-abc123def456")  # shaped like a key on purpose
     with pytest.raises(SecretInAuditError):
-        _log(logger, model="Bearer eyJhbGciOi")
+        _log(logger, model="Bea" + "rer eyJhbGciOi")  # shaped like a token on purpose
     assert logger.get_audit_trail(user_id=1) == []
 
 

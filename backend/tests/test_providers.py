@@ -12,6 +12,7 @@ import pytest
 import respx
 from httpx import Response
 
+from tests.conftest import fake_key
 from app.config import get_settings
 from app.llm.providers import (
     AnthropicProvider,
@@ -53,7 +54,7 @@ def test_openai_chat_shape_and_tokens() -> None:
         "choices": [{"message": {"role": "assistant", "content": "Added."}}],
         "usage": {"prompt_tokens": 31, "completion_tokens": 7},
     }))
-    out = OpenAIProvider().chat("sk-openai-key", "gpt-4o-mini", SYSTEM, USER)
+    out = OpenAIProvider().chat(fake_key("openai-key"), "gpt-4o-mini", SYSTEM, USER)
 
     assert out["text"] == "Added." and out["content"] == "Added."
     assert (out["tokens_in"], out["tokens_out"]) == (31, 7)
@@ -61,7 +62,7 @@ def test_openai_chat_shape_and_tokens() -> None:
     assert out["latency_ms"] >= 0
 
     sent = route.calls.last.request
-    assert sent.headers["authorization"] == "Bearer sk-openai-key"
+    assert sent.headers["authorization"] == f"Bearer {fake_key('openai-key')}"
     payload = json.loads(sent.content)
     assert payload["messages"][0] == {"role": "system", "content": SYSTEM}
     assert payload["messages"][1] == {"role": "user", "content": USER}
@@ -74,7 +75,7 @@ def test_openai_list_models_keeps_only_chat_ids() -> None:
         {"id": "text-embedding-3-small"}, {"id": "whisper-1"}, {"id": "dall-e-3"},
         {"id": "omni-moderation-latest"}, {"id": "gpt-4o-realtime-preview"},
     ]}))
-    ids = [m["id"] for m in OpenAIProvider().list_models("sk-openai-key")]
+    ids = [m["id"] for m in OpenAIProvider().list_models(fake_key("openai-key"))]
 
     assert ids == ["chatgpt-4o-latest", "gpt-4o-mini", "o3-mini"]
     assert all(m["is_free"] is False for m in OpenAIProvider().list_models("k"))
@@ -91,7 +92,7 @@ def test_anthropic_puts_system_at_top_level() -> None:
         "content": [{"type": "text", "text": "Added."}],
         "usage": {"input_tokens": 44, "output_tokens": 9},
     }))
-    out = AnthropicProvider().chat("sk-ant-key", "claude-sonnet-4-6", SYSTEM, USER)
+    out = AnthropicProvider().chat(fake_key("anthropic-key"), "claude-sonnet-4-6", SYSTEM, USER)
 
     assert out["text"] == "Added."
     assert (out["tokens_in"], out["tokens_out"]) == (44, 9)
@@ -102,7 +103,7 @@ def test_anthropic_puts_system_at_top_level() -> None:
     assert payload["messages"] == [{"role": "user", "content": USER}]
     assert all(m["role"] != "system" for m in payload["messages"])
     assert payload["max_tokens"] > 0                      # required by the API
-    assert sent.headers["x-api-key"] == "sk-ant-key"
+    assert sent.headers["x-api-key"] == fake_key("anthropic-key")
     assert sent.headers["anthropic-version"] == "2023-06-01"
     assert "authorization" not in sent.headers
 
@@ -126,7 +127,7 @@ def test_anthropic_list_models() -> None:
         {"id": "claude-sonnet-4-6", "display_name": "Claude Sonnet 4.6"},
         {"id": "claude-haiku-4-5", "display_name": "Claude Haiku 4.5"},
     ]}))
-    models = AnthropicProvider().list_models("sk-ant-key")
+    models = AnthropicProvider().list_models(fake_key("anthropic-key"))
     assert [m["id"] for m in models] == ["claude-sonnet-4-6", "claude-haiku-4-5"]
     assert models[0]["name"] == "Claude Sonnet 4.6"
     assert models[0]["is_free"] is False
@@ -220,10 +221,10 @@ def test_ollama_unreachable_is_actionable() -> None:
 def test_openai_errors_are_user_safe(status: int, body: dict, expected: str) -> None:
     respx.post(OPENAI_CHAT).mock(return_value=Response(status, json=body))
     with pytest.raises(ProviderError) as excinfo:
-        OpenAIProvider().chat("sk-openai-secret", "nope", SYSTEM, USER)
+        OpenAIProvider().chat(fake_key("openai-secret"), "nope", SYSTEM, USER)
     message = str(excinfo.value)
     assert expected.lower() in message.lower()
-    assert "sk-openai-secret" not in message          # the key never leaks
+    assert fake_key("openai-secret") not in message          # the key never leaks
     assert "OpenAI" in message                        # names the right provider
 
 
@@ -231,10 +232,11 @@ def test_openai_errors_are_user_safe(status: int, body: dict, expected: str) -> 
 def test_error_redacts_a_key_echoed_by_the_provider() -> None:
     """Some providers quote the offending credential straight back at you."""
     respx.post(ANTHROPIC_CHAT).mock(return_value=Response(
-        401, json={"error": {"message": "invalid x-api-key: sk-ant-supersecret-value"}}))
+        401, json={"error": {
+            "message": f"invalid x-api-key: {fake_key('anthropic-supersecret')}"}}))
     with pytest.raises(ProviderError) as excinfo:
-        AnthropicProvider().chat("sk-ant-supersecret-value", "m", SYSTEM, USER)
-    assert "sk-ant-supersecret-value" not in str(excinfo.value)
+        AnthropicProvider().chat(fake_key("anthropic-supersecret"), "m", SYSTEM, USER)
+    assert fake_key("anthropic-supersecret") not in str(excinfo.value)
     assert "***" in str(excinfo.value)
 
 
@@ -242,7 +244,7 @@ def test_error_redacts_a_key_echoed_by_the_provider() -> None:
 def test_non_json_error_body_still_produces_a_message() -> None:
     respx.get(OPENAI_MODELS).mock(return_value=Response(502, text="<html>Bad Gateway</html>"))
     with pytest.raises(ProviderError, match="HTTP 502"):
-        OpenAIProvider().list_models("sk-openai-key")
+        OpenAIProvider().list_models(fake_key("openai-key"))
 
 
 # --- custom models pass through unchanged -------------------------------------
@@ -395,7 +397,7 @@ def test_ollama_is_exempt_from_the_key_requirement(client: TestClient) -> None:
 def test_key_saved_for_one_provider_routes_to_that_provider(client: TestClient) -> None:
     headers = _auth(client)
     client.post("/api/v1/keys/provider",
-                json={"provider": "anthropic", "api_key": "sk-ant-routed-key"}, headers=headers)
+                json={"provider": "anthropic", "api_key": fake_key("anthropic-routed")}, headers=headers)
     route = respx.post(ANTHROPIC_CHAT).mock(return_value=Response(200, json={
         "content": [{"type": "text", "text": "hi"}],
         "usage": {"input_tokens": 5, "output_tokens": 2},
@@ -407,7 +409,7 @@ def test_key_saved_for_one_provider_routes_to_that_provider(client: TestClient) 
     finally:
         db.close()
     assert out["provider"] == "anthropic"          # what the audit log records
-    assert route.calls.last.request.headers["x-api-key"] == "sk-ant-routed-key"
+    assert route.calls.last.request.headers["x-api-key"] == fake_key("anthropic-routed")
     # the namespace is stripped before the id goes upstream
     assert json.loads(route.calls.last.request.content)["model"] == "claude-sonnet-4-6"
 
@@ -417,7 +419,7 @@ def test_custom_model_reaches_the_provider_unchanged(client: TestClient) -> None
     """No whitelist anywhere on the path: typed id in, typed id out."""
     headers = _auth(client)
     client.post("/api/v1/keys/provider",
-                json={"provider": "openai", "api_key": "sk-openai-custom"}, headers=headers)
+                json={"provider": "openai", "api_key": fake_key("openai-custom")}, headers=headers)
     route = respx.post(OPENAI_CHAT).mock(return_value=Response(200, json={
         "choices": [{"message": {"content": "ok"}}], "usage": {}}))
     db = _TestSession()
@@ -471,7 +473,7 @@ def test_provider_error_reaches_the_client_without_the_key(client: TestClient) -
 
     headers = _auth(client)
     client.post("/api/v1/keys/provider",
-                json={"provider": "openai", "api_key": "sk-openai-leakcheck"}, headers=headers)
+                json={"provider": "openai", "api_key": fake_key("openai-leakcheck")}, headers=headers)
     client.post("/api/v1/memory/ingest",
                 json={"session_tag": "s1", "text": "Stack: React + Tailwind."}, headers=headers)
     respx.post(OPENAI_CHAT).mock(return_value=Response(
@@ -481,7 +483,7 @@ def test_provider_error_reaches_the_client_without_the_key(client: TestClient) -
         "session_tag": "s1", "query": "hello", "model": "openai/gpt-4o-mini",
     }, headers=headers)
     assert resp.status_code == 502
-    assert "sk-openai-leakcheck" not in resp.text
+    assert fake_key("openai-leakcheck") not in resp.text
     assert "rejected the API key" in resp.json()["detail"]
 
 
@@ -491,7 +493,7 @@ def test_openrouter_ids_that_look_namespaced_are_qualified(client: TestClient) -
     Anthropic and demand a key the user never needed."""
     headers = _auth(client)
     client.post("/api/v1/keys/provider",
-                json={"provider": "openrouter", "api_key": "sk-or-v1-testkey1234"},
+                json={"provider": "openrouter", "api_key": fake_key("or-1234")},
                 headers=headers)
     respx.get("https://openrouter.ai/api/v1/models").mock(return_value=Response(200, json={
         "data": [{"id": "meta-llama/llama-3.3-70b-instruct:free", "context_length": 128000,

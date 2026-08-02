@@ -17,7 +17,7 @@ from app.llm import gateway
 from app.llm.providers import ProviderError
 from app.memory.audit import AuditLogger
 from app.memory.canonicalizer import NORM_VERSION, SCHEMA_VERSION, canonicalize
-from app.memory.extractor import extract_state_with_source
+from app.memory.extractor import extract
 from app.memory.handle import generate_handle
 from app.memory.retriever import retrieve_minimum
 from app.memory.storage import MemoryStore
@@ -67,8 +67,8 @@ def ingest(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     store = _store(db)
-    extracted_state, extraction_source = extract_state_with_source(body.text)
-    extracted = extracted_state.model_dump()
+    extraction = extract(body.text, db=db, user_id=user.id)
+    extracted = extraction.state.model_dump()
 
     parent_handle = store.get_latest_handle(user.id, body.session_tag)
     if parent_handle is not None:
@@ -90,9 +90,11 @@ def ingest(
         "parent_handle": parent_handle,
         "state": new_state,
         "conflicts": new_state.get("conflicts", []),
-        # metadata only — deliberately outside `state`, so it never
-        # reaches canonicalization and cannot change the handle
-        "extraction_source": extraction_source,
+        # metadata only — deliberately outside `state`, so neither the tier
+        # list nor the per-field origins can reach canonicalization or move
+        # the handle
+        "extraction_source": extraction.sources,
+        "extraction_origins": extraction.origins,
     }
 
 
@@ -211,7 +213,9 @@ def chat(
         session_tag=body.session_tag,
     )
     return {
-        "response": llm_result["content"],
+        # a model that answered in the context's JSON format instead of
+        # prose must not have that dumped into the chat bubble
+        "response": gateway.clean_reply(llm_result["content"]),
         "handle_used": handle,
         "subset_keys": result["metadata"]["subset_keys"],
         "audit_id": request_id,

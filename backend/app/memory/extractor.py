@@ -1,120 +1,59 @@
 """Structured conversational-state extraction for StateJar.
 
-Extraction is a two-stage pipeline:
+Three tiers, cheapest and most deterministic first:
 
-  1. a deterministic rule engine (regex + keyword patterns), and
-  2. a GLiNER neural pass that catches everything the patterns missed.
+  1. rules   — regex over clauses (app/memory/rules.py). Always runs.
+  2. gliner2 — schema-guided neural extraction, EXTRACTOR_MODE=gliner.
+  3. llm     — strict-JSON extraction through the user's own provider key,
+               EXTRACTOR_LLM_FALLBACK=true, and only for the messy case.
 
-Stage 2 is a standard part of the pipeline, not an add-on: it runs whenever
-the model can be loaded (EXTRACTOR_MODE=auto, the default). It broadens
-coverage — names, organizations, locations, contact details, amounts, dates,
-requirements, products, decisions, goals — so a fact stated in a phrasing no
-regex anticipated still reaches the state.
+WHY PROBABILISTIC TIERS ARE SAFE HERE
+-------------------------------------
+Extraction runs strictly BEFORE canonicalization. A tier's only power is to
+propose field values; the canonicalizer then sorts, normalises and serialises
+whatever it is given, and the handle is a SHA-256 of those bytes. So identity
+is a function of the *extracted fields*, never of which tier proposed them —
+two states with the same fields hash identically whether a regex, a neural
+model, or an LLM produced them. `extraction_source` is reported as metadata
+outside `state` for exactly this reason: it must never reach the canonical
+bytes. test_extractor_hard.py asserts both properties.
 
-Rules win every conflict. Stage 2 only ever writes to a field stage 1 left
-empty, because extraction feeds canonicalization: whatever wins here decides
-the handle, and the rule engine is the deterministic half.
-
-Deployment:
-  * gliner/torch live in requirements-ml.txt, never requirements.txt, so the
-    Railway build stays small. Where the extras are absent the pipeline
-    silently runs stage 1 alone.
-  * Import and model load are both deferred to first use, so startup never
-    blocks and a deployment without the extras pays nothing.
-  * Any failure (missing package, download error, bad prediction) logs once
-    and falls back to the rule result.
-  * EXTRACTOR_MODE=rules forces stage 1 alone — the escape hatch when you
-    need extraction to be reproducible across machines.
+Tier ordering is also the conflict-resolution order: rules win, because they
+are the only tier that returns the same answer on every machine. The neural
+tiers may only fill fields the rules left empty.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import re
+from dataclasses import dataclass, field as dc_field
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 from app.config import get_settings
+from app.memory import rules
 
 logger = logging.getLogger(__name__)
 
-# --- optional GLiNER layer ----------------------------------------------------
-
-# Values reported as `extraction_source`. They are metadata only and never
-# enter the canonicalized state, so they cannot affect a handle.
 SOURCE_RULES = "rules"
-SOURCE_GLINER = "gliner+rules"
+SOURCE_GLINER = "gliner2"
+SOURCE_LLM = "llm"
 
 GLINER_MODEL_NAME = "urchade/gliner_multi-v2.1"
+GLINER_MIN_CONFIDENCE = 0.5
 
-# EXTRACTOR_MODE values. "auto" and "gliner" both run the neural stage and
-# degrade to rules when it is unavailable; "rules" forces it off. Anything
-# unrecognised is treated as "rules" — a typo must never silently put a
-# neural model on the write path.
+# Tier 3 only earns its cost on genuinely messy input.
+LLM_MIN_WORDS = 12
+LLM_MAX_FIELDS = 2
+LLM_TIMEOUT_S = 8.0
+
 MODE_AUTO = "auto"
 MODE_GLINER = "gliner"
 MODE_RULES = "rules"
 _NEURAL_MODES = {MODE_AUTO, MODE_GLINER}
-
-# Entity label -> where it lands in StructuredState. GLiNER is zero-shot, so
-# these label strings *are* the prompt: widening this table is how the
-# pipeline learns to keep a new kind of fact. Money and contact preference
-# need parsing, so they are handled explicitly in the merge below.
-GLINER_TARGETS: dict[str, tuple[str, str]] = {
-    "person name": ("facts", "name"),
-    "organization or company": ("facts", "organization"),
-    "city or location": ("facts", "city"),
-    "email address": ("facts", "email"),
-    "phone number": ("facts", "phone"),
-    "date or deadline": ("constraints", "deadline"),
-    "decision": ("decisions", "choice"),
-    "product or item": ("decisions", "item"),
-    "goal or objective": ("goals", "primary"),
-}
-
-# Labels that accumulate instead of replacing. The list is kept sorted so the
-# canonical bytes never depend on the order GLiNER happened to emit spans in
-# (the canonicalizer preserves list order, it does not sort for us).
-GLINER_LIST_TARGETS: dict[str, tuple[str, str]] = {
-    "requirement or specification": ("constraints", "requirements"),
-}
-
-GLINER_LABELS = [
-    *GLINER_TARGETS,
-    *GLINER_LIST_TARGETS,
-    "money amount",
-    "contact preference",
-]
-
-# Loaded at most once per process — a failed attempt is never retried, so a
-# missing package costs one log line rather than an import storm.
-_gliner_state: dict[str, Any] = {"attempted": False, "model": None}
-
-
-def _gliner_enabled() -> bool:
-    return get_settings().extractor_mode.strip().lower() in _NEURAL_MODES
-
-
-def _load_gliner_model() -> Any | None:
-    """Import and load the GLiNER model once. Returns None on any failure."""
-    if _gliner_state["attempted"]:
-        return _gliner_state["model"]
-    _gliner_state["attempted"] = True
-    try:  # pragma: no cover - requires the optional ML extras
-        from gliner import GLiNER  # imported here: torch is slow to import
-
-        _gliner_state["model"] = GLiNER.from_pretrained(GLINER_MODEL_NAME)
-        logger.info("GLiNER extraction layer loaded (%s)", GLINER_MODEL_NAME)
-    except Exception as exc:  # noqa: BLE001 — missing extras must never crash
-        logger.warning(
-            "GLiNER unavailable (%s: %s) — falling back to rule-based extraction. "
-            "Install backend/requirements-ml.txt to enable it.",
-            exc.__class__.__name__,
-            exc,
-        )
-        _gliner_state["model"] = None
-    return _gliner_state["model"]
 
 
 # --- output schema ------------------------------------------------------------
@@ -135,321 +74,381 @@ class StructuredState(BaseModel):
     conflicts: list[dict[str, Any]] = Field(default_factory=list)
 
 
-# --- rule-based patterns ------------------------------------------------------
+@dataclass
+class Extraction:
+    """The state plus who produced what — metadata only, never canonicalized."""
 
-_NAME_RE = re.compile(
-    r"\b(?:my name is|i am called|call me|this is)\s+([A-Z][a-zA-Z]+)", re.IGNORECASE
-)
-
-# ₹2000 / Rs 2,000 / INR 2000, with an optional under/max/below/upto qualifier before
-_BUDGET_RE = re.compile(
-    r"(?P<qual>under|below|max(?:imum)?|up\s*to|at most|within)?\s*"
-    r"(?:₹|rs\.?|inr)\s*(?P<amount>\d[\d,]*)",
-    re.IGNORECASE,
-)
-_BUDGET_MAX_QUAL_RE = re.compile(r"\b(under|below|max(?:imum)?|up\s*to|at most|within|only)\b", re.IGNORECASE)
-
-_CONTACT_MODES = {
-    "email": re.compile(r"\be-?mails?\b", re.IGNORECASE),
-    "call": re.compile(r"\b(?:calls?|phone)\b", re.IGNORECASE),
-    "whatsapp": re.compile(r"\bwhats\s?app\b", re.IGNORECASE),
-}
-_PREFER_RE = re.compile(r"\bprefer(?:red|s)?\b|\bcontact me (?:via|by|on)\b", re.IGNORECASE)
-_NEGATED_TEMPLATE = r"\b(?:not?|never|avoid|don'?t|no)\b[^.;]*?\b{word}s?\b"
-
-_DECISION_RE = re.compile(
-    r"\b(?:i(?:'ll| will)? go with|i(?:'ve| have)? decided (?:on|to go with)|"
-    r"let'?s go with|i(?:'ll| will) take|final(?:ized)? (?:choice|decision)(?: is)?)\s+"
-    r"(?:the\s+)?([A-Za-z0-9][\w -]*?)(?=[.,;!]|$)",
-    re.IGNORECASE,
-)
-
-_DEADLINE_RE = re.compile(
-    r"\b(?:deadline is|due (?:by|on)|by|before)\s+"
-    r"((?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|"
-    r"next week|end of (?:the )?(?:day|week|month)|"
-    r"\d{1,2}(?:st|nd|rd|th)?\s+\w+|\w+\s+\d{1,2}(?:st|nd|rd|th)?))",
-    re.IGNORECASE,
-)
-
-_GOAL_RE = re.compile(
-    r"\b(?:i want to|my goal is to|i(?:'m| am) (?:trying|looking) to|i need to)\s+"
-    r"([^.,;!]+)",
-    re.IGNORECASE,
-)
-
-_UNRESOLVED_RE = re.compile(
-    r"\b(?:i )?(?:haven'?t|have not|didn'?t|not yet|still haven'?t)\s+"
-    r"(?:decided|chosen|picked|figured out|finalized)\s+(?:on\s+)?(?:the\s+|a\s+|my\s+)?"
-    r"([^.,;!]+)",
-    re.IGNORECASE,
-)
-_UNSURE_RE = re.compile(
-    r"\b(?:not sure|unsure|undecided) (?:about|on)\s+(?:the\s+|my\s+)?([^.,;!]+)",
-    re.IGNORECASE,
-)
+    state: StructuredState
+    sources: list[str] = dc_field(default_factory=lambda: [SOURCE_RULES])
+    origins: dict[str, str] = dc_field(default_factory=dict)
 
 
-# --- product/build spec patterns ----------------------------------------------
-# The other family this rule engine covers: someone briefing a coding
-# assistant. These are the constraints that get re-pasted into every prompt
-# when there is no memory, which is exactly what StateJar removes.
-
-# End of a clause: a full stop only counts when followed by space or end, so
-# "Next.js" survives while "…Tailwind. Dark theme" is cut at the sentence.
-_CLAUSE_END = r"(?=\s*(?:[.!;](?:\s|$)|,|$))"
-
-# "Stack: React + Tailwind" / "tech stack is Next.js and Postgres"
-_STACK_RE = re.compile(
-    r"\b(?:tech\s+)?stack\s*(?:is|:|=)\s*([A-Za-z0-9][\w .+/&-]*?)" + _CLAUSE_END,
-    re.IGNORECASE,
-)
-
-# "Dark theme" / "theme: light"
-_THEME_RE = re.compile(
-    r"\b(dark|light)\s+theme\b|\btheme\s*(?:is|:|=)\s*(dark|light)\b", re.IGNORECASE
-)
-
-# "brand color #E07856" / "accent colour: crimson"
-_BRAND_COLOR_RE = re.compile(
-    r"\b(?:brand|accent|primary)\s+colou?rs?\s*(?:is|to|:|=)?\s*"
-    r"(#[0-9A-Fa-f]{3,8}|[A-Za-z]+)",
-    re.IGNORECASE,
-)
-
-# "No external UI libraries" / "without any UI lib"
-_NO_UI_LIBS_RE = re.compile(
-    r"\b(?:no|without\s+(?:any\s+)?)\s*(?:external\s+)?ui\s+(?:librar(?:y|ies)|libs?)\b",
-    re.IGNORECASE,
-)
-
-# "Use shadcn/ui for the components" — the later instruction that contradicts it
-_UI_LIB_RE = re.compile(
-    r"\b(?:use|using|switch\s+to|add)\s+((?:shadcn(?:/ui)?|mui|material[-\s]?ui|chakra|"
-    r"ant\s?design|antd|bootstrap|radix|headless\s?ui|daisy\s?ui)[\w/.-]*)",
-    re.IGNORECASE,
-)
-
-# "Target audience: Indian SMB owners"
-_AUDIENCE_RE = re.compile(
-    r"\b(?:target\s+)?audience\s*(?:is|:|=)\s*([A-Za-z0-9][\w '&-]*?)" + _CLAUSE_END,
-    re.IGNORECASE,
-)
+_SECTIONS = ("facts", "preferences", "decisions", "constraints", "goals")
 
 
-def _slug(text: str) -> str:
-    """Normalize a phrase into a snake_case field name."""
-    return re.sub(r"[^a-z0-9]+", "_", text.strip().lower()).strip("_")
+def _section(state: StructuredState, name: str) -> dict[str, Any]:
+    return getattr(state, name)
 
 
-def _is_negated(text: str, word: str) -> bool:
-    return bool(re.search(_NEGATED_TEMPLATE.format(word=word), text, re.IGNORECASE))
+def _put(
+    state: StructuredState, origins: dict[str, str], source: str,
+    section: str, key: str, value: Any,
+) -> bool:
+    """Write a field only if it is still empty. Returns True if it landed."""
+    target = _section(state, section)
+    if key in target or value in (None, "", [], {}):
+        return False
+    target[key] = value
+    origins[f"{section}.{key}"] = source
+    return True
 
 
-# --- rule-based extraction ----------------------------------------------------
+def field_count(state: StructuredState) -> int:
+    return sum(len(_section(state, s)) for s in _SECTIONS) + len(state.unresolved)
 
 
-def _extract_rules(text: str) -> StructuredState:
+# --- tier 1: rules ------------------------------------------------------------
+
+
+def extract_rules(text: str) -> tuple[StructuredState, dict[str, str]]:
+    """Deterministic pass. Every pattern runs on every clause."""
     state = StructuredState()
+    origins: dict[str, str] = {}
+    seen_dates: list[str] = []
+    rejected_modes: list[str] = []
 
-    # facts: name
-    if m := _NAME_RE.search(text):
-        state.facts["name"] = m.group(1)
+    # Build-spec values are sentence-scoped and their own patterns already
+    # stop at a clause end, so they run once over the whole utterance. Per
+    # clause, "stack is Next.js and Postgres" would truncate at the "and", and
+    # "No external UI libraries. Use shadcn/ui" would let the earlier blanket
+    # ban win over the later, more specific instruction.
+    for section, key, value in rules.find_build_spec(text):
+        _put(state, origins, SOURCE_RULES, section, key, value)
 
-    # constraints: budget
-    if m := _BUDGET_RE.search(text):
-        amount = int(m.group("amount").replace(",", ""))
-        # qualifier may sit before the currency token or earlier in the clause
-        clause_start = max(text.rfind(".", 0, m.start()), text.rfind(",", 0, m.start())) + 1
-        clause = text[clause_start : m.end()]
-        if m.group("qual") or _BUDGET_MAX_QUAL_RE.search(clause):
-            state.constraints["budget_inr_max"] = amount
-        else:
-            state.constraints["budget_inr"] = amount
+    for clause in rules.split_clauses(text):
+        if name := rules.find_name(clause):
+            _put(state, origins, SOURCE_RULES, "facts", "name", name)
 
-    # preferences: contact mode
-    if _PREFER_RE.search(text):
-        chosen = [
-            mode
-            for mode, pat in _CONTACT_MODES.items()
-            if pat.search(text) and not _is_negated(text, mode)
-        ]
-        if len(chosen) == 1:
-            state.preferences["contact_mode"] = chosen[0]
-        elif len(chosen) > 1:
-            state.conflicts.append(
-                {"field": "contact_mode", "values": chosen, "reason": "multiple preferred modes"}
-            )
+        if city := rules.find_city(clause):
+            _put(state, origins, SOURCE_RULES, "facts", "city", city)
 
-    # decisions
-    if m := _DECISION_RE.search(text):
-        state.decisions["choice"] = m.group(1).strip()
+        if money := rules.find_money(clause):
+            amount, is_ceiling = money
+            key = "budget_inr_max" if is_ceiling else "budget_inr"
+            # a ceiling and a plain amount are different facts; neither
+            # overwrites the other, and the first one stated wins its key
+            if "budget_inr" not in state.constraints and "budget_inr_max" not in state.constraints:
+                _put(state, origins, SOURCE_RULES, "constraints", key, amount)
 
-    # constraints: deadline
-    if m := _DEADLINE_RE.search(text):
-        state.constraints["deadline"] = m.group(1).strip()
+        mode, rejected = rules.find_contact(clause)
+        for r in rejected:
+            if r not in rejected_modes:
+                rejected_modes.append(r)
+        if mode:
+            _put(state, origins, SOURCE_RULES, "preferences", "contact_mode", mode)
 
-    # goals
-    if m := _GOAL_RE.search(text):
-        state.goals["primary"] = m.group(1).strip()
+        for value in rules.find_dates(clause):
+            if value not in seen_dates:
+                seen_dates.append(value)
 
-    # --- build spec ---
-    if m := _STACK_RE.search(text):
-        state.decisions["stack"] = m.group(1).strip()
+        if decision := rules.find_decision(clause):
+            _put(state, origins, SOURCE_RULES, "decisions", "choice", decision)
 
-    if m := _THEME_RE.search(text):
-        state.preferences["theme"] = (m.group(1) or m.group(2)).lower()
+        if m := rules._REQUIREMENT.search(clause):
+            requirement = m.group(1).strip()
+            if requirement:
+                existing = state.constraints.get("requirements")
+                if existing is None:
+                    _put(state, origins, SOURCE_RULES, "constraints",
+                         "requirements", [requirement])
+                elif isinstance(existing, list) and requirement not in existing:
+                    existing.append(requirement)
+                    state.constraints["requirements"] = sorted(existing)
 
-    if m := _BRAND_COLOR_RE.search(text):
-        value = m.group(1).strip()
-        # hex codes are identity-bearing; normalize case so #E07856 and
-        # #e07856 cannot mint two different handles for the same colour
-        state.preferences["brand_color"] = value.upper() if value.startswith("#") else value.lower()
+        if m := rules._GOAL.search(clause):
+            _put(state, origins, SOURCE_RULES, "goals", "primary", m.group(1).strip())
 
-    # a named library wins over the blanket ban when both appear, because the
-    # specific instruction is the later intent — the contradiction is then
-    # surfaced by conflict detection rather than silently resolved here
-    if m := _UI_LIB_RE.search(text):
-        state.constraints["no_ui_libs"] = m.group(1).strip()
-    elif _NO_UI_LIBS_RE.search(text):
-        state.constraints["no_ui_libs"] = "none"
+        for field_name, reason in rules.find_unresolved(clause):
+            if not any(u.field == field_name for u in state.unresolved):
+                state.unresolved.append(UnresolvedField(field=field_name, reason=reason))
+                origins[f"unresolved.{field_name}"] = SOURCE_RULES
 
-    if m := _AUDIENCE_RE.search(text):
-        state.facts["audience"] = m.group(1).strip()
+    if seen_dates:
+        _put(state, origins, SOURCE_RULES, "constraints", "deadline", seen_dates[0])
+        if len(seen_dates) > 1:
+            _put(state, origins, SOURCE_RULES, "constraints",
+                 "additional_dates", sorted(seen_dates[1:]))
 
-    # unresolved
-    for pat, reason in ((_UNRESOLVED_RE, "not provided"), (_UNSURE_RE, "user unsure")):
-        for m in pat.finditer(text):
-            field = _slug(m.group(1))
-            if field and not any(u.field == field for u in state.unresolved):
-                state.unresolved.append(UnresolvedField(field=field, reason=reason))
+    # an explicit switch ("call me instead of email") is a contradiction worth
+    # recording, not just a preference update
+    chosen = state.preferences.get("contact_mode")
+    for rejected in rejected_modes:
+        if chosen and rejected != chosen:
+            state.conflicts.append({
+                "field": "contact_mode",
+                "values": [chosen, rejected],
+                "reason": f"user rejected {rejected} in favour of {chosen}",
+            })
+            break
 
-    return state
-
-
-# --- GLiNER merge -------------------------------------------------------------
-
-# "40k" / "2,000" / "₹1.5 lakh"
-_MONEY_RE = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*(k|lakh|lakhs|cr|crore)?", re.IGNORECASE)
-_MONEY_SCALE = {"k": 1_000, "lakh": 100_000, "lakhs": 100_000, "cr": 10_000_000, "crore": 10_000_000}
+    return state, origins
 
 
-def _parse_money(value: str) -> int | None:
-    """Best-effort amount from a money span; None when nothing parses."""
-    m = _MONEY_RE.search(value)
-    if not m:
-        return None
-    try:
-        amount = float(m.group(1).replace(",", ""))
-    except ValueError:
-        return None
-    amount *= _MONEY_SCALE.get((m.group(2) or "").lower(), 1)
-    return int(amount) if amount > 0 else None
+# --- tier 2: GLiNER2 ----------------------------------------------------------
+
+# label -> (section, key). The schema StateJar actually stores, so the model
+# is asked for the fields we keep rather than generic entity types.
+GLINER_SCHEMA: dict[str, tuple[str, str]] = {
+    "person name": ("facts", "name"),
+    "city": ("facts", "city"),
+    "monetary amount": ("constraints", "budget_inr"),
+    "budget ceiling": ("constraints", "budget_inr_max"),
+    "contact preference": ("preferences", "contact_mode"),
+    "decision": ("decisions", "choice"),
+    "constraint": ("constraints", "requirement"),
+    "goal": ("goals", "primary"),
+    "deadline": ("constraints", "deadline"),
+    "unresolved item": ("unresolved", "item"),
+}
+GLINER_LABELS = list(GLINER_SCHEMA)
+
+_gliner_state: dict[str, Any] = {"attempted": False, "model": None}
 
 
-def _contact_mode_from(phrase: str) -> str | None:
-    """Map a free-text preference span onto a known contact mode."""
-    for mode, pat in _CONTACT_MODES.items():
-        if pat.search(phrase) and not _is_negated(phrase, mode):
-            return mode
-    return None
+def _gliner_enabled() -> bool:
+    return get_settings().extractor_mode.strip().lower() in _NEURAL_MODES
 
 
-def _predict_entities(model: Any, text: str) -> list[dict[str, Any]]:
-    """Call whichever prediction API this model object exposes."""
-    if hasattr(model, "predict_entities"):
+def _load_gliner_model() -> Any | None:
+    """Import and load once. Any failure is permanent and silent after one log."""
+    if _gliner_state["attempted"]:
+        return _gliner_state["model"]
+    _gliner_state["attempted"] = True
+    try:  # pragma: no cover - requires the optional ML extras
+        from gliner import GLiNER  # imported here: torch is slow to import
+
+        _gliner_state["model"] = GLiNER.from_pretrained(GLINER_MODEL_NAME)
+        logger.info("GLiNER2 extraction tier loaded (%s)", GLINER_MODEL_NAME)
+    except Exception as exc:  # noqa: BLE001 — missing extras must never crash
+        logger.warning(
+            "GLiNER2 unavailable (%s: %s) — continuing with rules only. "
+            "Install backend/requirements-ml.txt to enable it.",
+            exc.__class__.__name__, exc,
+        )
+        _gliner_state["model"] = None
+    return _gliner_state["model"]
+
+
+def _predict(model: Any, text: str) -> list[dict[str, Any]]:
+    """Whichever schema/NER interface this build of GLiNER exposes."""
+    if hasattr(model, "extract"):          # GLiNER2 schema interface
+        raw = model.extract(text, GLINER_SCHEMA_SPEC)
+    elif hasattr(model, "predict_entities"):
         raw = model.predict_entities(text, GLINER_LABELS)
-    else:  # gliner2-style API
+    else:
         raw = model.extract_entities(text, GLINER_LABELS)
     if isinstance(raw, dict):
         raw = raw.get("entities", [])
     return [e for e in (raw or []) if isinstance(e, dict)]
 
 
-def _merge_gliner(text: str, state: StructuredState) -> bool:
-    """Fill gaps in `state` from GLiNER spans, in place.
+# GLiNER2 takes a schema description rather than a flat label list.
+GLINER_SCHEMA_SPEC = {"entities": GLINER_LABELS}
 
-    Rule-extracted values always win: every write below is conditional on the
-    field being absent. Returns True when the model actually ran.
-    """
+
+def merge_gliner(
+    text: str, state: StructuredState, origins: dict[str, str]
+) -> bool:
+    """Fill gaps from GLiNER2. Returns True only if the model actually ran."""
     model = _load_gliner_model()
     if model is None:
         return False
     try:
-        entities = _predict_entities(model, text)
+        entities = _predict(model, text)
     except Exception as exc:  # noqa: BLE001 — a bad prediction must not 500
-        logger.warning("GLiNER prediction failed (%s) — using rules only", exc)
+        logger.warning("GLiNER2 prediction failed (%s) — using rules only", exc)
         return False
-
-    sections: dict[str, dict[str, Any]] = {
-        "facts": state.facts,
-        "preferences": state.preferences,
-        "decisions": state.decisions,
-        "constraints": state.constraints,
-        "goals": state.goals,
-    }
-    touched_lists: set[tuple[str, str]] = set()
 
     for ent in entities:
         label = str(ent.get("label", "")).strip().lower()
         value = str(ent.get("text", "")).strip()
-        if not value:
+        score = ent.get("score", ent.get("confidence", 1.0))
+        if not value or label not in GLINER_SCHEMA:
+            continue
+        try:
+            if float(score) < GLINER_MIN_CONFIDENCE:
+                continue
+        except (TypeError, ValueError):
+            pass
+
+        section, key = GLINER_SCHEMA[label]
+
+        if section == "unresolved":
+            slug = rules.slugify(value)
+            if slug and not any(u.field == slug for u in state.unresolved):
+                state.unresolved.append(UnresolvedField(field=slug, reason="not provided"))
+                origins[f"unresolved.{slug}"] = SOURCE_GLINER
             continue
 
-        if label == "money amount":
-            # skip entirely if the rules already found any budget figure —
-            # adding the other key would fabricate a second, conflicting one
-            if "budget_inr" not in state.constraints and "budget_inr_max" not in state.constraints:
-                amount = _parse_money(value)
-                if amount is not None:
-                    key = (
-                        "budget_inr_max"
-                        if _BUDGET_MAX_QUAL_RE.search(text)
-                        else "budget_inr"
-                    )
-                    state.constraints[key] = amount
+        if key == "name":
+            # the same blocklist the rules use — a neural span is no more
+            # entitled to name someone "via" than a regex was
+            if value.lower() in rules.NAME_STOPWORDS:
+                continue
+            value = value.title()
+        elif key == "city":
+            if value.lower() in rules.NAME_STOPWORDS:
+                continue
+            value = value.title()
+        elif key in ("budget_inr", "budget_inr_max"):
+            parsed = rules.find_money(value)
+            if parsed is None:
+                continue
+            if "budget_inr" in state.constraints or "budget_inr_max" in state.constraints:
+                continue
+            value = parsed[0]
+        elif key == "contact_mode":
+            mode, _ = rules.find_contact(f"prefer {value}")
+            if mode is None:
+                continue
+            value = mode
+        elif key == "requirement":
+            existing = state.constraints.get("requirements")
+            if isinstance(existing, list):
+                if value not in existing:
+                    state.constraints["requirements"] = sorted([*existing, value])
+                continue
+            key = "requirements"
+            value = [value]
 
-        elif label == "contact preference":
-            if "contact_mode" not in state.preferences and not state.conflicts:
-                if mode := _contact_mode_from(value):
-                    state.preferences["contact_mode"] = mode
-
-        elif target := GLINER_TARGETS.get(label):
-            section, field = target
-            sections[section].setdefault(field, value)
-
-        elif target := GLINER_LIST_TARGETS.get(label):
-            section, field = target
-            bucket = sections[section].setdefault(field, [])
-            if isinstance(bucket, list):  # a rule scalar here wins outright
-                if value not in bucket:
-                    bucket.append(value)
-                touched_lists.add((section, field))
-
-    # sorted, so identical text yields identical canonical bytes no matter
-    # what order the model emitted the spans in
-    for section, field in touched_lists:
-        sections[section][field] = sorted(sections[section][field])
+        _put(state, origins, SOURCE_GLINER, section, key, value)
 
     return True
+
+
+# --- tier 3: LLM structured extraction ----------------------------------------
+
+_LLM_PROMPT = (
+    "You extract structured state from a user message. Reply with STRICT JSON "
+    "only — no prose, no markdown fence. Use exactly this shape, omitting any "
+    "key you cannot fill:\n"
+    '{"facts":{"name":"","city":""},"preferences":{"contact_mode":"email|call|whatsapp|sms"},'
+    '"decisions":{"choice":""},"constraints":{"budget_inr":0,"budget_inr_max":0,"deadline":""},'
+    '"goals":{"primary":""},"unresolved":[{"field":"","reason":""}]}\n'
+    "budget_inr is a plain amount; budget_inr_max is a stated ceiling. "
+    "Never invent a value that is not in the message."
+)
+
+
+def _llm_should_run(text: str, state: StructuredState) -> bool:
+    if not get_settings().extractor_llm_fallback:
+        return False
+    return len(text.split()) > LLM_MIN_WORDS and field_count(state) < LLM_MAX_FIELDS
+
+
+def merge_llm(
+    text: str, state: StructuredState, origins: dict[str, str],
+    db: Any = None, user_id: int | None = None,
+) -> bool:
+    """Last resort for messy input. Never raises, never retries."""
+    if db is None or user_id is None:
+        return False
+    try:
+        from app.llm.gateway import chat as gateway_chat
+
+        result = gateway_chat(
+            db, user_id,
+            model=get_settings().extractor_llm_model,
+            system_context=_LLM_PROMPT,
+            user_message=text,
+        )
+        payload = _parse_json(result.get("text") or result.get("content") or "")
+    except Exception as exc:  # noqa: BLE001 — no key, no credit, bad JSON: all fine
+        logger.info("LLM extraction tier skipped (%s)", exc.__class__.__name__)
+        return False
+    if not payload:
+        return False
+
+    landed = False
+    for section in _SECTIONS:
+        values = payload.get(section)
+        if not isinstance(values, dict):
+            continue
+        for key, value in values.items():
+            if key == "name" and str(value).lower() in rules.NAME_STOPWORDS:
+                continue
+            if key in ("budget_inr", "budget_inr_max"):
+                if "budget_inr" in state.constraints or "budget_inr_max" in state.constraints:
+                    continue
+                try:
+                    value = int(value)
+                except (TypeError, ValueError):
+                    continue
+                if value <= 0:
+                    continue
+            landed |= _put(state, origins, SOURCE_LLM, section, key, value)
+
+    for item in payload.get("unresolved") or []:
+        if not isinstance(item, dict):
+            continue
+        slug = rules.slugify(str(item.get("field", "")))
+        if slug and not any(u.field == slug for u in state.unresolved):
+            state.unresolved.append(
+                UnresolvedField(field=slug, reason=str(item.get("reason") or "not provided"))
+            )
+            origins[f"unresolved.{slug}"] = SOURCE_LLM
+            landed = True
+    return landed
+
+
+def _parse_json(text: str) -> dict[str, Any] | None:
+    """Tolerate a fenced or prose-wrapped JSON object."""
+    candidate = text.strip()
+    if candidate.startswith("```"):
+        candidate = re.sub(r"^```(?:json)?|```$", "", candidate, flags=re.MULTILINE).strip()
+    if not candidate.startswith("{"):
+        match = re.search(r"\{.*\}", candidate, re.DOTALL)
+        if not match:
+            return None
+        candidate = match.group(0)
+    try:
+        parsed = json.loads(candidate)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 # --- public API ---------------------------------------------------------------
 
 
-def extract_state_with_source(text: str) -> tuple[StructuredState, str]:
-    """Extract state plus the layer that produced it.
+def extract(text: str, db: Any = None, user_id: int | None = None) -> Extraction:
+    """Run the tiers in order and report which ones contributed."""
+    state, origins = extract_rules(text)
+    sources = [SOURCE_RULES]
 
-    The source is metadata for the UI only — it is deliberately *not* part of
-    StructuredState, so canonicalization and therefore the handle are
-    identical whichever extractor ran.
-    """
-    state = _extract_rules(text)
-    if _gliner_enabled() and _merge_gliner(text, state):
-        return state, SOURCE_GLINER
-    return state, SOURCE_RULES
+    if _gliner_enabled() and merge_gliner(text, state, origins):
+        sources.append(SOURCE_GLINER)
+
+    if _llm_should_run(text, state) and merge_llm(text, state, origins, db, user_id):
+        sources.append(SOURCE_LLM)
+
+    return Extraction(state=state, sources=sources, origins=origins)
+
+
+def extract_state_with_source(
+    text: str, db: Any = None, user_id: int | None = None
+) -> tuple[StructuredState, list[str]]:
+    """Back-compatible shim; `sources` is a list now, not a single string."""
+    result = extract(text, db, user_id)
+    return result.state, result.sources
 
 
 def extract_state(text: str) -> StructuredState:
     """Extract a StructuredState from raw user text."""
-    return extract_state_with_source(text)[0]
+    return extract(text).state
+
+
+# kept so existing imports and tests keep resolving
+_extract_rules = lambda text: extract_rules(text)[0]  # noqa: E731
+_merge_gliner = lambda text, state: merge_gliner(text, state, {})  # noqa: E731
+_parse_money = lambda value: (rules.find_money(value) or (None,))[0]  # noqa: E731

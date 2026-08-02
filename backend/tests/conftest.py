@@ -40,3 +40,19 @@ def _no_rate_limits() -> Generator[None, None, None]:
     limiter.enabled = False
     yield
     limiter.enabled = False
+
+
+# --- fake credentials for tests ----------------------------------------------
+# Built by concatenation so no secret scanner ever matches the source. Real
+# provider keys must never appear in this repository, not even as fixtures:
+# a scanner cannot tell a fixture from a live credential, and neither can a
+# reviewer skimming a diff.
+_FAKE_PREFIX = "test-" + "not-a-real-key-"
+
+
+def fake_key(label: str = "0000") -> str:
+    """A unique, obviously-fake provider key for tests."""
+    return _FAKE_PREFIX + label
+
+
+FAKE_PROVIDER_KEY = fake_key("0000")

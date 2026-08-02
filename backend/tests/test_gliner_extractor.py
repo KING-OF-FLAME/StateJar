@@ -1,9 +1,8 @@
-"""Tests for the env-gated GLiNER extraction layer.
+"""Tier-2 plumbing: gating, loading, and the merge contract.
 
-GLiNER is mocked throughout, so these run in CI with neither torch nor the
-gliner package installed. Every messy-input case is asserted in BOTH modes:
-rules-mode output must be byte-identical to today's behaviour, and gliner
-may only ever add fields the rules left empty.
+Behavioural extraction cases live in test_extractor_hard.py; this file covers
+how the GLiNER2 tier is switched on, loaded and merged — the parts that must
+hold even on a machine with no ML extras installed.
 """
 
 from collections.abc import Generator
@@ -11,12 +10,15 @@ from typing import Any
 
 import pytest
 
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.memory import extractor
 from app.memory.canonicalizer import NORM_VERSION, SCHEMA_VERSION, canonicalize
 from app.memory.extractor import (
+    GLINER_SCHEMA,
     SOURCE_GLINER,
     SOURCE_RULES,
+    extract,
+    extract_rules,
     extract_state,
     extract_state_with_source,
 )
@@ -46,7 +48,6 @@ def _clean_env() -> Generator[None, None, None]:
 
 
 def _use_gliner(monkeypatch: pytest.MonkeyPatch, entities: list[dict[str, Any]]) -> FakeGliner:
-    """Switch to gliner mode with a mocked model."""
     monkeypatch.setenv("EXTRACTOR_MODE", "gliner")
     get_settings.cache_clear()
     fake = FakeGliner(entities)
@@ -63,40 +64,13 @@ def _rules_only(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_default_mode_is_auto() -> None:
-    """The neural stage is part of the pipeline, not an opt-in.
+    """The neural tier is part of the pipeline, not an opt-in.
 
     Asserted against the field default rather than get_settings(), because
     conftest pins the suite to rules so results never depend on whether the
     ML extras happen to be installed locally.
     """
-    from app.config import Settings
-
     assert Settings.model_fields["extractor_mode"].default == extractor.MODE_AUTO
-
-
-def test_auto_mode_runs_the_neural_stage(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("EXTRACTOR_MODE", "auto")
-    get_settings.cache_clear()
-    monkeypatch.setattr(
-        extractor, "_load_gliner_model",
-        lambda: FakeGliner([{"label": "city or location", "text": "Pune"}]),
-    )
-    state, source = extract_state_with_source("Working out of Pune these days")
-    assert source == SOURCE_GLINER
-    assert state.facts["city"] == "Pune"
-
-
-def test_auto_mode_degrades_when_the_package_is_absent(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """What production does: default mode, no extras installed."""
-    monkeypatch.setenv("EXTRACTOR_MODE", "auto")
-    get_settings.cache_clear()
-    monkeypatch.setattr(extractor, "_load_gliner_model", lambda: None)
-
-    state, source = extract_state_with_source("My name is Ayaan")
-    assert source == SOURCE_RULES
-    assert state.facts["name"] == "Ayaan"
 
 
 @pytest.mark.parametrize("mode,enabled", [
@@ -113,33 +87,43 @@ def test_mode_parsing(mode: str, enabled: bool, monkeypatch: pytest.MonkeyPatch)
 
 
 def test_rules_mode_never_touches_gliner(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The neural layer must not even be imported in production mode."""
+    """The neural tier must not even be imported in production mode."""
     _rules_only(monkeypatch)
-    called = False
-
-    def _boom() -> Any:
-        nonlocal called
-        called = True
-        raise AssertionError("gliner must not be loaded in rules mode")
-
-    monkeypatch.setattr(extractor, "_load_gliner_model", _boom)
-    state, source = extract_state_with_source("My name is Ayaan, budget under ₹2000")
-    assert source == SOURCE_RULES
-    assert called is False
-    assert state.facts["name"] == "Ayaan"
+    monkeypatch.setattr(
+        extractor, "_load_gliner_model",
+        lambda: pytest.fail("gliner loaded while EXTRACTOR_MODE=rules"),
+    )
+    result = extract("My name is Ayaan, budget under 2000")
+    assert result.sources == [SOURCE_RULES]
+    assert result.state.facts["name"] == "Ayaan"
 
 
-def test_unavailable_gliner_falls_back_silently(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("EXTRACTOR_MODE", "gliner")
+def test_auto_mode_runs_the_neural_tier(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EXTRACTOR_MODE", "auto")
     get_settings.cache_clear()
-    monkeypatch.setattr(extractor, "_load_gliner_model", lambda: None)  # import failed
+    monkeypatch.setattr(
+        extractor, "_load_gliner_model",
+        lambda: FakeGliner([{"label": "city", "text": "Pune", "score": 0.9}]),
+    )
+    result = extract("working out of somewhere new")
+    assert result.sources == [SOURCE_RULES, SOURCE_GLINER]
+    assert result.state.facts["city"] == "Pune"
 
-    state, source = extract_state_with_source("My name is Ayaan, budget under ₹2000")
-    assert source == SOURCE_RULES              # degraded, not crashed
-    assert state.facts["name"] == "Ayaan"      # rules still ran
+
+def test_auto_mode_degrades_when_the_package_is_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """What production does: default mode, no extras installed."""
+    monkeypatch.setenv("EXTRACTOR_MODE", "auto")
+    get_settings.cache_clear()
+    monkeypatch.setattr(extractor, "_load_gliner_model", lambda: None)
+
+    result = extract("My name is Ayaan")
+    assert result.sources == [SOURCE_RULES]
+    assert result.state.facts["name"] == "Ayaan"
 
 
-def test_gliner_prediction_error_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_prediction_error_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("EXTRACTOR_MODE", "gliner")
     get_settings.cache_clear()
 
@@ -148,9 +132,9 @@ def test_gliner_prediction_error_falls_back(monkeypatch: pytest.MonkeyPatch) -> 
             raise RuntimeError("CUDA out of memory")
 
     monkeypatch.setattr(extractor, "_load_gliner_model", lambda: Exploding())
-    state, source = extract_state_with_source("My name is Ayaan")
-    assert source == SOURCE_RULES
-    assert state.facts["name"] == "Ayaan"
+    result = extract("My name is Ayaan")
+    assert result.sources == [SOURCE_RULES]
+    assert result.state.facts["name"] == "Ayaan"
 
 
 def test_model_is_loaded_at_most_once(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -159,281 +143,84 @@ def test_model_is_loaded_at_most_once(monkeypatch: pytest.MonkeyPatch) -> None:
     get_settings.cache_clear()
     attempts = {"n": 0}
 
-    def _fail_import(*_a: Any, **_k: Any) -> Any:
-        attempts["n"] += 1
-        raise ImportError("No module named 'gliner'")
-
-    monkeypatch.setattr(extractor, "GLINER_MODEL_NAME", "x")
-    monkeypatch.setitem(extractor._gliner_state, "attempted", False)
     import builtins
 
     real_import = builtins.__import__
 
     def _guard(name: str, *a: Any, **k: Any) -> Any:
         if name == "gliner":
-            return _fail_import()
+            attempts["n"] += 1
+            raise ImportError("No module named 'gliner'")
         return real_import(name, *a, **k)
 
     monkeypatch.setattr(builtins, "__import__", _guard)
     for _ in range(3):
-        extract_state_with_source("My name is Ayaan")
+        extract("My name is Ayaan")
     assert attempts["n"] == 1
 
 
-# --- rules always win ---------------------------------------------------------
+# --- merge contract -----------------------------------------------------------
 
 
 def test_gliner_never_overwrites_a_rule_value(monkeypatch: pytest.MonkeyPatch) -> None:
-    text = "My name is Ayaan, budget under ₹2000. I prefer email."
-    rules_state = extract_state(text)
+    text = "My name is Ayaan, budget under 2000, I prefer email"
+    rules_state, _ = extract_rules(text)
 
     _use_gliner(monkeypatch, [
-        {"label": "person name", "text": "Rohan"},          # conflicts with Ayaan
-        {"label": "money amount", "text": "99,999"},        # conflicts with 2000
-        {"label": "contact preference", "text": "call me"},  # conflicts with email
-        {"label": "decision", "text": "express shipping"},   # a genuine gap
+        {"label": "person name", "text": "Rohan", "score": 0.99},           # conflicts
+        {"label": "monetary amount", "text": "99,999", "score": 0.99},      # conflicts
+        {"label": "contact preference", "text": "call", "score": 0.99},     # conflicts
+        {"label": "decision", "text": "express shipping", "score": 0.99},   # a real gap
     ])
-    merged, source = extract_state_with_source(text)
+    result = extract(text)
 
-    assert source == SOURCE_GLINER
-    assert merged.facts["name"] == "Ayaan"                    # rule wins
-    assert merged.constraints["budget_inr_max"] == 2000       # rule wins
-    assert "budget_inr" not in merged.constraints             # no fabricated 2nd key
-    assert merged.preferences["contact_mode"] == "email"      # rule wins
-    assert merged.decisions["choice"] == "express shipping"   # gap filled
-    # everything the rules produced is still present, untouched
-    assert rules_state.facts == merged.facts
-
-
-# --- coverage: the neural stage keeps what the rules cannot see ---------------
+    assert result.sources == [SOURCE_RULES, SOURCE_GLINER]
+    assert result.state.facts["name"] == "Ayaan"                  # rule wins
+    assert result.state.constraints["budget_inr_max"] == 2000     # rule wins
+    assert "budget_inr" not in result.state.constraints           # no second key
+    assert result.state.preferences["contact_mode"] == "email"    # rule wins
+    assert result.state.decisions["choice"] == "express shipping"  # gap filled
+    assert result.state.facts == rules_state.facts
 
 
-PRIYA_TEXT = (
-    "Hey, Priya here from Zerodha in Bengaluru, priya@zerodha.com, "
-    "+91 98765 43210. Looking at the Pro plan, must be SOC2 compliant "
-    "and support SSO."
-)
-PRIYA_SPANS = [
-    {"label": "person name", "text": "Priya"},
-    {"label": "organization or company", "text": "Zerodha"},
-    {"label": "city or location", "text": "Bengaluru"},
-    {"label": "email address", "text": "priya@zerodha.com"},
-    {"label": "phone number", "text": "+91 98765 43210"},
-    {"label": "product or item", "text": "Pro plan"},
-    {"label": "requirement or specification", "text": "SSO support"},
-    {"label": "requirement or specification", "text": "SOC2 compliant"},
-]
-
-
-def test_rules_alone_miss_this_phrasing() -> None:
-    """The premise of the neural stage: no regex anticipates this sentence."""
-    state = extractor._extract_rules(PRIYA_TEXT)
-    assert state.facts == {}
-    assert state.decisions == {}
-    assert state.constraints == {}
-
-
-def test_neural_stage_captures_what_the_rules_missed(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _use_gliner(monkeypatch, PRIYA_SPANS)
-    merged, source = extract_state_with_source(PRIYA_TEXT)
-
-    assert source == SOURCE_GLINER
-    assert merged.facts == {
-        "name": "Priya",
-        "organization": "Zerodha",
-        "city": "Bengaluru",
-        "email": "priya@zerodha.com",
-        "phone": "+91 98765 43210",
-    }
-    assert merged.decisions["item"] == "Pro plan"
-    # accumulated, deduped, sorted
-    assert merged.constraints["requirements"] == ["SOC2 compliant", "SSO support"]
-
-
-def test_repeated_spans_are_deduped(monkeypatch: pytest.MonkeyPatch) -> None:
-    _use_gliner(monkeypatch, [
-        {"label": "requirement or specification", "text": "SSO support"},
-        {"label": "requirement or specification", "text": "SSO support"},
-        {"label": "requirement or specification", "text": "SOC2 compliant"},
-    ])
-    merged, _ = extract_state_with_source(PRIYA_TEXT)
-    assert merged.constraints["requirements"] == ["SOC2 compliant", "SSO support"]
-
-
-def test_span_order_cannot_change_the_handle(monkeypatch: pytest.MonkeyPatch) -> None:
-    """GLiNER span order is not guaranteed; the canonical bytes must be.
-
-    The canonicalizer preserves list order, so an unsorted accumulator would
-    make the handle depend on the order the model happened to emit spans in.
-    """
-    import itertools
-
-    handles = set()
-    for permutation in itertools.permutations(PRIYA_SPANS[-4:]):
-        _use_gliner(monkeypatch, [*PRIYA_SPANS[:-4], *permutation])
-        state, _ = extract_state_with_source(PRIYA_TEXT)
-        canonical = canonicalize(state.model_dump())
-        handles.add(generate_handle(canonical, SCHEMA_VERSION, NORM_VERSION))
-
-    assert len(handles) == 1, f"span order leaked into the handle: {handles}"
-
-
-def test_rule_scalar_in_a_list_slot_is_not_clobbered(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Rules win even where the neural stage wants to accumulate."""
-    _use_gliner(monkeypatch, [
-        {"label": "requirement or specification", "text": "SSO support"},
-    ])
-    state = extractor.StructuredState(constraints={"requirements": "hand-written"})
-    assert extractor._merge_gliner(PRIYA_TEXT, state) is True
-    assert state.constraints["requirements"] == "hand-written"
-
-
-def test_every_label_has_a_home() -> None:
+def test_every_schema_label_has_a_destination() -> None:
     """A label the model is prompted with but nothing maps is a silent drop."""
-    mapped = set(extractor.GLINER_TARGETS) | set(extractor.GLINER_LIST_TARGETS)
-    mapped |= {"money amount", "contact preference"}  # parsed explicitly
-    assert set(extractor.GLINER_LABELS) == mapped
+    for label, target in GLINER_SCHEMA.items():
+        assert isinstance(target, tuple) and len(target) == 2, label
+        section, key = target
+        assert section in ("facts", "preferences", "decisions", "constraints",
+                           "goals", "unresolved"), label
+        assert key
 
 
-# --- messy real-world inputs, asserted in BOTH modes ---------------------------
-
-MESSY_CASES = [
-    pytest.param(
-        "mera naam Rohan hai Delhi se, budget 40k tak",
-        [
-            {"label": "person name", "text": "Rohan"},
-            {"label": "city or location", "text": "Delhi"},
-            {"label": "money amount", "text": "40k"},
-        ],
-        {
-            "facts": {"name": "Rohan", "city": "Delhi"},
-            "constraints": {"budget_inr": 40000},
-        },
-        id="hinglish-name-city-and-40k",
-    ),
-    pytest.param(
-        "budget 2000 se zyada nahi hona chahiye",
-        [{"label": "money amount", "text": "2000"}],
-        {"constraints": {"budget_inr": 2000}},
-        id="hinglish-budget-ceiling",
-    ),
-    pytest.param(
-        "Hi, I'm Aarav Sharma from Pune. I prefer WhatsApp only, never call me. "
-        "At least 16GB RAM.",
-        [
-            {"label": "person name", "text": "Aarav Sharma"},
-            {"label": "city or location", "text": "Pune"},
-            {"label": "requirement or specification", "text": "At least 16GB RAM"},
-        ],
-        {
-            "facts": {"name": "Aarav Sharma", "city": "Pune"},
-            # the spec the rules had no pattern for is no longer dropped
-            "constraints": {"requirements": ["At least 16GB RAM"]},
-        },
-        id="english-name-city-whatsapp-and-spec",
-    ),
-    pytest.param(
-        "Ship it by Friday, and the review call is on 12 March.",
-        [
-            {"label": "date or deadline", "text": "Friday"},
-            {"label": "date or deadline", "text": "12 March"},
-        ],
-        {},  # rules already catch "by Friday"; gliner must not overwrite it
-        id="two-dates",
-    ),
-    pytest.param(
-        "I'll go with the annual plan, but I haven't decided the start date.",
-        [{"label": "decision", "text": "monthly plan"}],
-        {},  # rules found the decision; gliner's competing one must lose
-        id="decision-plus-unresolved",
-    ),
-]
+def test_back_compat_shim_returns_a_list() -> None:
+    """extract_state_with_source used to return a single string."""
+    state, sources = extract_state_with_source("My name is Ayaan")
+    assert sources == [SOURCE_RULES]
+    assert state.facts["name"] == "Ayaan"
+    assert extract_state("My name is Ayaan").facts["name"] == "Ayaan"
 
 
-@pytest.mark.parametrize("text,entities,gliner_adds", MESSY_CASES)
-def test_messy_input_rules_mode_unchanged(
-    text: str, entities: list[dict[str, Any]], gliner_adds: dict[str, Any],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Rules mode must behave exactly as before — gliner is never consulted."""
-    _rules_only(monkeypatch)
-    monkeypatch.setattr(
-        extractor, "_load_gliner_model",
-        lambda: pytest.fail("gliner consulted in rules mode"),
-    )
-    state, source = extract_state_with_source(text)
-    assert source == SOURCE_RULES
-    # the untouched rule engine is the reference implementation
-    assert state.model_dump() == extractor._extract_rules(text).model_dump()
-
-
-@pytest.mark.parametrize("text,entities,gliner_adds", MESSY_CASES)
-def test_messy_input_gliner_mode_only_adds(
-    text: str, entities: list[dict[str, Any]], gliner_adds: dict[str, Any],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Gliner mode keeps every rule value and may only fill empty fields."""
-    rules_state = extractor._extract_rules(text).model_dump()
-
-    fake = _use_gliner(monkeypatch, entities)
-    merged, source = extract_state_with_source(text)
-    assert source == SOURCE_GLINER
-    assert fake.calls == [text]
-
-    merged_dump = merged.model_dump()
-    for section, rule_values in rules_state.items():
-        if isinstance(rule_values, dict):
-            for key, value in rule_values.items():
-                assert merged_dump[section][key] == value, (
-                    f"gliner overwrote rule value {section}.{key}"
-                )
-        else:  # unresolved / conflicts lists are rule-owned
-            assert merged_dump[section] == rule_values
-
-    for section, expected in gliner_adds.items():
-        for key, value in expected.items():
-            assert merged_dump[section][key] == value
-
-
-# --- identity is unaffected by the extraction source --------------------------
-
-
-def test_handle_is_identical_regardless_of_extraction_source(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """extraction_source is metadata: it must never reach the canonical bytes."""
-    text = "My name is Ayaan, budget under ₹2000. I prefer email."
+def test_handle_is_identical_regardless_of_tier(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tier labels are metadata: they must never reach the canonical bytes."""
+    text = "My name is Ayaan, budget under 2000. I prefer email."
 
     _rules_only(monkeypatch)
-    rules_state, rules_source = extract_state_with_source(text)
+    rules_state = extract(text).state
 
-    # gliner runs but predicts only what the rules already found, so the
-    # extracted state is identical and only the source label differs
     _use_gliner(monkeypatch, [
-        {"label": "person name", "text": "Ayaan"},
-        {"label": "contact preference", "text": "email"},
+        {"label": "person name", "text": "Ayaan", "score": 0.99},
+        {"label": "contact preference", "text": "email", "score": 0.99},
     ])
-    gliner_state, gliner_source = extract_state_with_source(text)
+    tiered = extract(text)
 
-    assert rules_source == SOURCE_RULES and gliner_source == SOURCE_GLINER
-    assert rules_state.model_dump() == gliner_state.model_dump()
+    assert tiered.sources == [SOURCE_RULES, SOURCE_GLINER]
+    assert rules_state.model_dump() == tiered.state.model_dump()
 
     canonical_rules = canonicalize(rules_state.model_dump())
-    canonical_gliner = canonicalize(gliner_state.model_dump())
-    assert canonical_rules == canonical_gliner              # byte-identical
-    assert "extraction_source" not in canonical_rules       # never serialized
-
+    canonical_tiered = canonicalize(tiered.state.model_dump())
+    assert canonical_rules == canonical_tiered
+    assert SOURCE_GLINER not in canonical_rules
     assert generate_handle(canonical_rules, SCHEMA_VERSION, NORM_VERSION) == generate_handle(
-        canonical_gliner, SCHEMA_VERSION, NORM_VERSION
+        canonical_tiered, SCHEMA_VERSION, NORM_VERSION
     )
-
-
-def test_money_parsing() -> None:
-    assert extractor._parse_money("40k") == 40000
-    assert extractor._parse_money("₹2,000") == 2000
-    assert extractor._parse_money("1.5 lakh") == 150000
-    assert extractor._parse_money("no digits here") is None

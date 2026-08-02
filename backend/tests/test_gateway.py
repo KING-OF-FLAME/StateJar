@@ -11,6 +11,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from tests.conftest import fake_key
 from app.auth.models import auth_metadata
 from app.database import get_db
 from app.llm.gateway import (
@@ -57,7 +58,7 @@ def _auth_headers(client: TestClient) -> dict[str, str]:
 
 
 def test_encrypt_decrypt_roundtrip() -> None:
-    key = "sk-or-v1-abc123xyz789"
+    key = fake_key("or-abc789")
     blob = encrypt_key(key)
     assert blob != key.encode()
     assert decrypt_key(blob) == key
@@ -69,18 +70,18 @@ def test_save_provider_key_masks_key(client: TestClient) -> None:
     headers = _auth_headers(client)
     resp = client.post(
         "/api/v1/keys/provider",
-        json={"provider": "openrouter", "api_key": "sk-or-v1-abc123xyz9876"},
+        json={"provider": "openrouter", "api_key": fake_key("or-abc9876")},
         headers=headers,
     )
     assert resp.status_code == 201
     body = resp.json()
     assert body == {"provider": "openrouter", "key_last4": "9876", "saved": True}
-    assert "sk-or" not in str(body)
+    assert "not-a-real-key" not in str(body)
 
 
 def test_save_key_requires_auth(client: TestClient) -> None:
     resp = client.post(
-        "/api/v1/keys/provider", json={"provider": "openrouter", "api_key": "sk-or-v1-abc123"}
+        "/api/v1/keys/provider", json={"provider": "openrouter", "api_key": fake_key("or-abc123")}
     )
     assert resp.status_code == 401
 
@@ -89,7 +90,7 @@ def test_unknown_provider_rejected(client: TestClient) -> None:
     headers = _auth_headers(client)
     resp = client.post(
         "/api/v1/keys/provider",
-        json={"provider": "notreal", "api_key": "sk-something-123"},
+        json={"provider": "notreal", "api_key": fake_key("unknown-provider")},
         headers=headers,
     )
     assert resp.status_code == 422
@@ -108,7 +109,7 @@ def test_list_keys_requires_auth(client: TestClient) -> None:
 
 def test_list_keys_returns_latest_per_provider_masked(client: TestClient) -> None:
     headers = _auth_headers(client)
-    for key in ("sk-or-v1-oldkey1111", "sk-or-v1-newkey2222"):
+    for key in (fake_key("or-old-1111"), fake_key("or-new-2222")):
         client.post(
             "/api/v1/keys/provider",
             json={"provider": "openrouter", "api_key": key},
@@ -122,14 +123,14 @@ def test_list_keys_returns_latest_per_provider_masked(client: TestClient) -> Non
     assert body[0]["provider"] == "openrouter"
     assert body[0]["key_last4"] == "2222"
     assert body[0]["created_at"]
-    assert "sk-or" not in str(body)
+    assert "not-a-real-key" not in str(body)
 
 
 def test_list_keys_scoped_to_current_user(client: TestClient) -> None:
     headers_a = _auth_headers(client)
     client.post(
         "/api/v1/keys/provider",
-        json={"provider": "openrouter", "api_key": "sk-or-v1-userakey7777"},
+        json={"provider": "openrouter", "api_key": fake_key("or-usera-7777")},
         headers=headers_a,
     )
     client.post("/api/v1/auth/signup", json={"email": "b@example.com", "password": "s3cretpass"})
@@ -186,7 +187,7 @@ def test_chat_calls_openrouter_with_user_key(client: TestClient) -> None:
     headers = _auth_headers(client)
     client.post(
         "/api/v1/keys/provider",
-        json={"provider": "openrouter", "api_key": "sk-or-v1-testkey1234"},
+        json={"provider": "openrouter", "api_key": fake_key("or-1234")},
         headers=headers,
     )
     route = respx.post(OpenRouterProvider.BASE_URL).mock(
@@ -214,7 +215,7 @@ def test_chat_calls_openrouter_with_user_key(client: TestClient) -> None:
     assert result["content"] == "Hello Ayaan!"
     assert result["usage"]["total_tokens"] == 42
     sent = route.calls.last.request
-    assert sent.headers["authorization"] == "Bearer sk-or-v1-testkey1234"
+    assert sent.headers["authorization"] == f"Bearer {fake_key('or-1234')}"
     assert b"StateJar handle" in sent.content
 
 
@@ -302,7 +303,7 @@ def test_models_empty_without_any_key(client: TestClient) -> None:
 def test_models_groups_openrouter_free_and_paid(client: TestClient) -> None:
     headers = _auth_headers(client)
     client.post("/api/v1/keys/provider",
-                json={"provider": "openrouter", "api_key": "sk-or-v1-testkey1234"},
+                json={"provider": "openrouter", "api_key": fake_key("or-1234")},
                 headers=headers)
     respx.get("https://openrouter.ai/api/v1/models").mock(
         return_value=Response(200, json=_CATALOG))
@@ -323,7 +324,7 @@ def test_models_groups_openrouter_free_and_paid(client: TestClient) -> None:
 def test_models_cached_per_user_for_an_hour(client: TestClient) -> None:
     headers = _auth_headers(client)
     client.post("/api/v1/keys/provider",
-                json={"provider": "openrouter", "api_key": "sk-or-v1-testkey1234"},
+                json={"provider": "openrouter", "api_key": fake_key("or-1234")},
                 headers=headers)
     route = respx.get("https://openrouter.ai/api/v1/models").mock(
         return_value=Response(200, json=_CATALOG))
@@ -338,25 +339,26 @@ def test_saving_a_key_invalidates_the_cache(client: TestClient) -> None:
     """A rotated key must be used immediately, not in an hour."""
     headers = _auth_headers(client)
     client.post("/api/v1/keys/provider",
-                json={"provider": "openrouter", "api_key": "sk-or-v1-testkey1234"},
+                json={"provider": "openrouter", "api_key": fake_key("or-1234")},
                 headers=headers)
     route = respx.get("https://openrouter.ai/api/v1/models").mock(
         return_value=Response(200, json=_CATALOG))
 
     client.get("/api/v1/models", headers=headers)
     client.post("/api/v1/keys/provider",
-                json={"provider": "openrouter", "api_key": "sk-or-v1-rotated9999"},
+                json={"provider": "openrouter", "api_key": fake_key("or-rotated-9999")},
                 headers=headers)
     client.get("/api/v1/models", headers=headers)
     assert route.call_count == 2
-    assert route.calls.last.request.headers["authorization"] == "Bearer sk-or-v1-rotated9999"
+    assert route.calls.last.request.headers["authorization"] == (
+        f"Bearer {fake_key('or-rotated-9999')}")
 
 
 @respx.mock
 def test_one_failing_provider_does_not_break_the_others(client: TestClient) -> None:
     """The whole point of grouping: a dead provider costs only its own group."""
     headers = _auth_headers(client)
-    for provider, key in (("openrouter", "sk-or-v1-testkey1234"), ("openai", "sk-openai-testkey")):
+    for provider, key in (("openrouter", fake_key("or-1234")), ("openai", fake_key("openai-testkey"))):
         client.post("/api/v1/keys/provider",
                     json={"provider": provider, "api_key": key}, headers=headers)
 
@@ -378,21 +380,23 @@ def test_one_failing_provider_does_not_break_the_others(client: TestClient) -> N
 def test_catalog_error_never_contains_the_key(client: TestClient) -> None:
     headers = _auth_headers(client)
     client.post("/api/v1/keys/provider",
-                json={"provider": "openai", "api_key": "sk-openai-supersecret"},
+                json={"provider": "openai", "api_key": fake_key("openai-supersecret")},
                 headers=headers)
     respx.get("https://api.openai.com/v1/models").mock(
-        return_value=Response(401, json={"error": {"message": "bad key sk-openai-supersecret"}}))
+        return_value=Response(401, json={"error": {
+            # the provider quotes the offending credential straight back
+            "message": f"bad key {fake_key('openai-supersecret')}"}}))
 
     body = client.get("/api/v1/models", headers=headers).json()
     error = body["groups"][0]["error"]
-    assert "sk-openai-supersecret" not in error
+    assert fake_key("openai-supersecret") not in error
     assert "***" in error and "rejected the API key" in error
 
 
 def test_delete_provider_key(client: TestClient) -> None:
     headers = _auth_headers(client)
     client.post("/api/v1/keys/provider",
-                json={"provider": "openai", "api_key": "sk-openai-testkey"}, headers=headers)
+                json={"provider": "openai", "api_key": fake_key("openai-testkey")}, headers=headers)
     listed = client.get("/api/v1/keys/provider", headers=headers).json()
     assert [k["provider"] for k in listed] == ["openai"]
 
@@ -406,15 +410,16 @@ def test_delete_provider_key(client: TestClient) -> None:
 def test_saving_a_key_twice_replaces_it(client: TestClient) -> None:
     """A rotated key must not leave the old one usable."""
     headers = _auth_headers(client)
-    for key in ("sk-openai-firstkey1", "sk-openai-secondkey2"):
+    for key in (fake_key("openai-first-1"), fake_key("openai-second-2")):
         client.post("/api/v1/keys/provider",
                     json={"provider": "openai", "api_key": key}, headers=headers)
     listed = client.get("/api/v1/keys/provider", headers=headers).json()
-    assert len(listed) == 1 and listed[0]["key_last4"] == "key2"
+    assert len(listed) == 1
+    assert listed[0]["key_last4"] == fake_key("openai-second-2")[-4:]
 
     db = _TestSession()
     try:
-        assert gw._get_user_key(db, 1, "openai") == "sk-openai-secondkey2"
+        assert gw._get_user_key(db, 1, "openai") == fake_key("openai-second-2")
         rows = db.execute(
             select(gw.provider_keys).where(gw.provider_keys.c.provider == "openai")
         ).mappings().all()

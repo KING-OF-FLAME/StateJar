@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     # "rules" forces the deterministic engine alone — use it when extraction
     # must be reproducible across machines.
     extractor_mode: str = "auto"
+    # Tier 3: strict-JSON extraction through the user's own provider key, and
+    # only for a long utterance the first two tiers barely understood. Off by
+    # default because it spends the user's credit.
+    extractor_llm_fallback: bool = False
+    extractor_llm_model: str = "openrouter/openai/gpt-4o-mini"
     # --- retrieval ---
     # Off by default. When true (and sentence-transformers is installed) a
     # query the keyword intent map does not recognise falls back to embedding

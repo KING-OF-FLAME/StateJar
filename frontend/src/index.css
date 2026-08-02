@@ -1205,3 +1205,30 @@ body.presenter-mode .card, body.presenter-mode .panel { border-color: #D8D2C8; }
   background: #F1EFEB; color: #6B6B7B; border: 1px solid #E2DED6;
   font-size: 0.68rem; display: inline-block; margin-bottom: 10px;
 }
+
+/* ---------- extraction tier provenance ---------- */
+.tier-chips { display: flex; gap: 7px; flex-wrap: wrap; margin-bottom: 12px; }
+.tier-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--mono); font-size: 0.64rem; letter-spacing: 0.03em;
+  padding: 3px 9px 3px 7px; border-radius: 999px; cursor: help;
+  background: var(--card); border: 1px solid var(--line); color: var(--ink-soft);
+}
+.tier-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
+.tier-count {
+  font-size: 0.58rem; padding: 0 5px; border-radius: 999px;
+  background: rgba(26, 26, 46, 0.07); color: var(--ink-soft);
+}
+/* one colour per tier, reused by the per-field marker below */
+.tier-rules { color: var(--accent); border-color: rgba(224, 120, 86, 0.35); background: var(--accent-soft); }
+.tier-gliner2 { color: var(--green); border-color: rgba(107, 144, 128, 0.35); background: var(--green-soft); }
+.tier-llm { color: #7C6BA0; border-color: rgba(124, 107, 160, 0.35); background: #EFECF6; }
+
+/* a quiet marker per field; the tooltip names the tier */
+.jt-origin {
+  display: inline-block; width: 5px; height: 5px; border-radius: 50%;
+  margin-left: 7px; vertical-align: middle; background: currentColor; opacity: 0.55;
+}
+.jt-origin.tier-rules { color: var(--accent); }
+.jt-origin.tier-gliner2 { color: var(--green); }
+.jt-origin.tier-llm { color: #7C6BA0; }

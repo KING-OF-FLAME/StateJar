@@ -1,0 +1,20 @@
+# GitGuardian configuration.
+#
+# backend/tests/** contains provider-key *fixtures*, never live credentials.
+# They are built by string concatenation in tests/conftest.py (fake_key())
+# precisely so no scanner pattern matches. Two assertions still hold
+# deliberately key-shaped strings, split across a `+`, because the code under
+# test is the audit scrubber — it exists to refuse secret-looking input, so a
+# test feeding it a harmless string would assert nothing.
+#
+# Scoped to the test tree by PATH rather than by disabling the detector:
+# `ignored-detectors` applies repo-wide, so silencing "Generic High Entropy
+# Secret" there would also blind the scanner to a real key in application
+# code. Everything outside backend/tests/** stays fully scanned, and
+# scripts/check-secrets.sh blocks a credential at commit time.
+
+version: 2
+
+secret:
+  ignored-paths:
+    - backend/tests/**

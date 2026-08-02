@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 from starlette.requests import Request
 
+from tests.conftest import fake_key
 from app.auth.models import auth_metadata, users
 from app.auth.routes import UserOut, get_current_user
 from app.auth.security import TOKEN_TTL, create_access_token
@@ -169,7 +170,7 @@ def _is_literal_string(node: ast.AST) -> bool:
 
 # --- secrets never leave the process ------------------------------------------
 
-FULL_KEY = "sk-or-v1-0123456789abcdefSECRET"
+FULL_KEY = fake_key("or-full-secret")
 
 SECRET_NAMES = ("api_key", "secret", "password", "plaintext", "encrypted_key")
 
