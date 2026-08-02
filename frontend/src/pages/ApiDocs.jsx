@@ -1,91 +1,39 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../lib/api.js'
+import {
+  CONCEPTS, ENDPOINTS, ERROR_CODES, RATE_LIMITS,
+} from '../components/docs/endpoints.js'
+import { LANGUAGES, SDK_SNIPPET, snippetFor } from '../components/docs/snippets.js'
 
-/* The quickstart from docs/api.md, in the console so a judge can read it
-   without leaving the app. Examples are pre-filled with the reader's own
-   base URL, and with a real key's last 4 when they have one. */
+/* Self-contained reference: everything a developer needs is on this page,
+   with no hop to a file on GitHub. The language choice is one piece of state
+   for the whole document, so picking Python once switches every example. */
 
-// Branded public API. The original Railway host still serves the same
-// service and is kept working for existing integrations, but new code
-// should be pointed here.
 const PUBLIC_API_BASE = 'https://api.statejar.com'
 
-const CURL = {
-  ingest: (base, key) => `curl -X POST "${base}/api/v1/memory/ingest" \\
-  -H "X-API-Key: ${key}" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-        "session_tag": "user-42",
-        "text": "My name is Ayaan, budget under ₹2000. I prefer email."
-      }'`,
-  query: (base, key) => `curl -X POST "${base}/api/v1/memory/query" \\
-  -H "X-API-Key: ${key}" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-        "session_tag": "user-42",
-        "query": "What is my budget?",
-        "audit": true
-      }'`,
-  chat: (base, key) => `curl -X POST "${base}/api/v1/chat" \\
-  -H "X-API-Key: ${key}" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-        "session_tag": "user-42",
-        "query": "Book my delivery with my usual preferences",
-        "model": "meta-llama/llama-3.3-70b-instruct:free"
-      }'`,
-}
-
-const RESPONSES = {
-  ingest: `{
-  "handle": "shm_18c8fecaf5dacf38deda0914ecdb1b38b40566c1",
-  "parent_handle": null,
-  "state": {
-    "constraints": { "budget_inr_max": 2000 },
-    "facts": { "name": "Ayaan" },
-    "preferences": { "contact_mode": "email" }
-  },
-  "extraction_source": "rules"
-}`,
-  query: `{
-  "handle_used": "shm_18c8fecaf5dacf38deda0914ecdb1b38b40566c1",
-  "subset": { "constraints": { "budget_inr_max": 2000 } },
-  "metadata": {
-    "retrieval_mode": "intent_map",
-    "subset_keys": ["constraints.budget_inr_max"],
-    "fields_dropped": 4,
-    "token_estimate_saved_pct": 73.9
-  },
-  "audit_id": "7272c2ea8d0c44e1"
-}`,
-  chat: `{
-  "response": "Booking with your saved preferences — I'll email the confirmation and keep it under ₹2000.",
-  "handle_used": "shm_18c8fecaf5dacf38deda0914ecdb1b38b40566c1",
-  "subset_keys": ["preferences.contact_mode", "constraints.budget_inr_max"],
-  "audit_id": "4b8e77c1a0d2f3e9"
-}`,
-}
-
-const ENDPOINTS = [
-  ['GET', '/api/v1/usage', 'Requests today, states, audit rows, tokens saved'],
-  ['GET', '/api/v1/memory/versions?session_tag=…', 'The handle chain for a session, oldest first'],
-  ['GET', '/api/v1/memory/state/{handle}', 'Any state you own, by handle'],
-  ['GET', '/api/v1/audit?limit=50', 'What was disclosed, when, to which model'],
-  ['GET', '/api/v1/memory/stats', 'Console summary'],
+const SECTIONS = [
+  ['introduction', 'Introduction'],
+  ['authentication', 'Authentication'],
+  ['quickstart', 'Quickstart'],
+  ['endpoints', 'Endpoints'],
+  ['concepts', 'Concepts'],
+  ['errors', 'Errors'],
+  ['rate-limits', 'Rate limits'],
+  ['sdk', 'SDK snippet'],
 ]
 
-function Snippet({ code }) {
+function CodeBlock({ code, label }) {
   const [copied, setCopied] = useState(false)
   const copy = async () => {
     await navigator.clipboard.writeText(code)
     setCopied(true)
-    setTimeout(() => setCopied(false), 1400)
+    setTimeout(() => setCopied(false), 1500)
   }
   return (
     <div className="snippet">
-      <button className="snippet-copy" type="button" onClick={copy}
-        aria-label="Copy code to clipboard">
+      <button type="button" className="snippet-copy" onClick={copy}
+        aria-label={`Copy ${label || 'code'}`}>
         {copied ? 'Copied ✓' : 'Copy'}
       </button>
       <pre className="mono"><code>{code}</code></pre>
@@ -93,35 +41,119 @@ function Snippet({ code }) {
   )
 }
 
-function Step({ n, title, children }) {
+function LangTabs({ value, onChange }) {
   return (
-    <section className="docs-step">
-      <h3><span className="docs-step-n mono">{n}</span> {title}</h3>
-      {children}
-    </section>
+    <div className="lang-tabs" role="tablist" aria-label="Example language">
+      {LANGUAGES.map((lang) => (
+        <button
+          key={lang.id} role="tab" type="button"
+          aria-selected={value === lang.id}
+          className={value === lang.id ? 'active' : ''}
+          onClick={() => onChange(lang.id)}
+        >
+          {lang.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function SchemaTable({ caption, rows, withRequired }) {
+  if (!rows.length) return <p className="docs-note">No parameters.</p>
+  return (
+    <div className="table-scroll">
+      <table className="docs-table">
+        <caption className="sr-only">{caption}</caption>
+        <thead>
+          <tr>
+            <th>Field</th><th>Type</th>
+            {withRequired && <th>Required</th>}
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row[0]}>
+              <td className="mono">{row[0]}</td>
+              <td className="mono docs-type">{row[1]}</td>
+              {withRequired && (
+                <td>{row[2] ? <span className="req-yes">yes</span> : <span className="req-no">no</span>}</td>
+              )}
+              <td>{withRequired ? row[3] : row[2]}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function EndpointCard({ endpoint, base, apiKey, language, onLanguage }) {
+  const spec = {
+    base, key: apiKey, method: endpoint.method,
+    path: endpoint.path, body: endpoint.body,
+  }
+  return (
+    <article className="ep-card" id={`ep-${endpoint.id}`}>
+      <header className="ep-head">
+        <span className={`ep-pill ep-${endpoint.method.toLowerCase()}`}>{endpoint.method}</span>
+        <code className="mono ep-path">{endpoint.path}</code>
+      </header>
+      <p className="docs-note">{endpoint.description}</p>
+
+      <p className="docs-label">Request</p>
+      <SchemaTable caption={`${endpoint.title} request`} rows={endpoint.request} withRequired />
+
+      <p className="docs-label">Response</p>
+      <SchemaTable caption={`${endpoint.title} response`} rows={endpoint.response} />
+
+      <p className="docs-label">Example request</p>
+      <LangTabs value={language} onChange={onLanguage} />
+      <CodeBlock code={snippetFor(language, spec)} label={`${endpoint.title} request`} />
+
+      <p className="docs-label">Example response</p>
+      <CodeBlock code={JSON.stringify(endpoint.example, null, 2)} label={`${endpoint.title} response`} />
+    </article>
   )
 }
 
 export default function ApiDocs() {
-  const [hasKey, setHasKey] = useState(null)   // null = still checking
-  const [last4, setLast4] = useState(null)
+  const [language, setLanguage] = useState(
+    () => localStorage.getItem('statejar_docs_lang') || 'curl')
+  const [keyInfo, setKeyInfo] = useState(null)   // null = loading
+  const [active, setActive] = useState('introduction')
+  const [navOpen, setNavOpen] = useState(false)
 
-  // What this build actually calls. VITE_API_URL is baked in at build time,
-  // so it is the truth for a deployed console; when it is unset (local dev)
-  // fall back to the public branded API rather than this page's own origin,
-  // so the snippets are always something a reader can paste and run.
   const base = import.meta.env.VITE_API_URL || PUBLIC_API_BASE
+  const apiKey = keyInfo?.key_last4 ? `sj_live_…${keyInfo.key_last4}` : 'sj_live_YOUR_KEY'
+
+  const pickLanguage = (id) => {
+    setLanguage(id)
+    localStorage.setItem('statejar_docs_lang', id)
+  }
 
   useEffect(() => {
     api('/apikeys')
-      .then((keys) => {
-        setHasKey(keys.length > 0)
-        if (keys.length) setLast4(keys[0].key_last4)
-      })
-      .catch(() => setHasKey(false)) // docs must render even if the call fails
+      .then((keys) => setKeyInfo(keys.find((k) => k.status === 'active') || false))
+      .catch(() => setKeyInfo(false))  // docs must render without a session
   }, [])
 
-  const key = last4 ? `sj_live_…${last4}` : 'sj_live_YOUR_KEY'
+  // highlight the section currently in view
+  useEffect(() => {
+    const headings = SECTIONS
+      .map(([id]) => document.getElementById(id))
+      .filter(Boolean)
+    if (!headings.length) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries.filter((e) => e.isIntersecting)
+        if (visible.length) setActive(visible[0].target.id)
+      },
+      { rootMargin: '-80px 0px -70% 0px' },
+    )
+    headings.forEach((h) => observer.observe(h))
+    return () => observer.disconnect()
+  }, [keyInfo])
 
   return (
     <>
@@ -135,91 +167,207 @@ export default function ApiDocs() {
         <Link className="btn btn-primary" to="/api-keys">Manage API keys</Link>
       </div>
 
-      <div className="panel docs-panel">
-        <Step n="1" title="Get a key">
-          {hasKey === null ? (
-            <p className="empty-note">Checking your keys…</p>
-          ) : hasKey ? (
-            <p className="empty-note">
-              You have an active key ending <span className="mono">{last4}</span>. The
-              examples below use it — paste your full key in place of{' '}
-              <span className="mono">{key}</span>.
+      <div className="docs-layout">
+        <nav className={`docs-nav${navOpen ? ' open' : ''}`} aria-label="Documentation sections">
+          <button
+            type="button" className="docs-nav-toggle"
+            onClick={() => setNavOpen((v) => !v)}
+            aria-expanded={navOpen}
+          >
+            {SECTIONS.find(([id]) => id === active)?.[1] || 'Contents'}
+            <span aria-hidden="true">▾</span>
+          </button>
+          <ul>
+            {SECTIONS.map(([id, label]) => (
+              <li key={id}>
+                <a
+                  href={`#${id}`}
+                  className={active === id ? 'active' : ''}
+                  onClick={() => setNavOpen(false)}
+                >
+                  {label}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </nav>
+
+        <div className="docs-body">
+          {/* 1 */}
+          <section id="introduction" className="docs-section">
+            <h2>Introduction</h2>
+            <p className="docs-lede">
+              StateJar turns conversations into structured state that any model can
+              read. It stores extracted facts, preferences, decisions and
+              constraints — never the transcript — and addresses each version by a
+              SHA-256 hash of its canonical form. Ask a question and you get back
+              only the fields that question needs, with a record of exactly what
+              was disclosed.
             </p>
-          ) : (
-            <p className="empty-note">
-              No keys yet. <Link to="/api-keys">Generate one →</Link> It is shown once
-              and stored only as a SHA-256 hash.
+            <p className="docs-note">
+              That hash is the whole idea: the same meaning always produces the same
+              handle, so memory is reproducible rather than probabilistic. Base URL:
             </p>
-          )}
-          <Snippet code={`export STATEJAR_URL=${base}\nexport STATEJAR_KEY=sj_live_…`} />
-        </Step>
+            <CodeBlock code={`export STATEJAR_URL=${base}`} label="base url" />
+          </section>
 
-        <Step n="2" title="Ingest — turn text into structured state">
-          <p className="docs-note">
-            The <span className="mono">handle</span> is a content address: identical
-            state always produces an identical handle. New information for the same{' '}
-            <span className="mono">session_tag</span> mints a new handle whose{' '}
-            <span className="mono">parent_handle</span> points at the previous one —
-            history is appended, never overwritten.
-          </p>
-          <Snippet code={CURL.ingest(base, key)} />
-          <p className="docs-label">Response</p>
-          <Snippet code={RESPONSES.ingest} />
-        </Step>
+          {/* 2 */}
+          <section id="authentication" className="docs-section">
+            <h2>Authentication</h2>
+            <p className="docs-note">
+              Every request carries an <span className="mono">X-API-Key</span> header.
+              Generate a key under{' '}
+              <Link to="/api-keys">API Keys → Developer API</Link>; it is shown once
+              and stored only as a SHA-256 hash, so a lost key is replaced rather
+              than recovered.
+            </p>
+            {keyInfo === null ? (
+              <p className="empty-note">Checking your keys…</p>
+            ) : keyInfo ? (
+              <p className="empty-note">
+                Examples below use your active key ending{' '}
+                <span className="mono">{keyInfo.key_last4}</span> — paste the full
+                value in its place.
+              </p>
+            ) : (
+              <p className="empty-note">
+                No active key yet. <Link to="/api-keys">Generate one →</Link>
+              </p>
+            )}
+            <CodeBlock code={`X-API-Key: ${apiKey}`} label="auth header" />
+            <p className="docs-note">
+              Keys can be issued with a 7-day, 30-day, 1-year or never expiry, and
+              revoked at any time — revocation takes effect on the next request. An
+              expired key returns <span className="mono">401</span> with the date it
+              lapsed, so a stale value in an <span className="mono">.env</span>
+              {' '}diagnoses itself:
+            </p>
+            <CodeBlock
+              code={'{\n  "detail": "API key expired on 2026-07-04"\n}'}
+              label="expired response"
+            />
+            <p className="docs-note">
+              A key authenticates the data plane only. Minting keys, listing them
+              and reading your provider keys stay console-only, so a leaked key
+              cannot mint a successor or spend your provider credit.
+            </p>
+          </section>
 
-        <Step n="3" title="Query — retrieve the minimum a question needs">
-          <p className="docs-note">
-            <span className="mono">subset</span> is the only thing you put in a model's
-            context — not the transcript, not the whole profile.{' '}
-            <span className="mono">audit: true</span> records the disclosure so you can
-            prove later exactly what was shared.
-          </p>
-          <Snippet code={CURL.query(base, key)} />
-          <p className="docs-label">Response</p>
-          <Snippet code={RESPONSES.query} />
-        </Step>
+          {/* 3 */}
+          <section id="quickstart" className="docs-section">
+            <h2>Quickstart</h2>
+            <p className="docs-note">Sixty seconds from key to retrieved memory.</p>
+            <ol className="docs-steps">
+              <li>
+                <strong>Generate a key</strong> under{' '}
+                <Link to="/api-keys">API Keys</Link>, then export it:
+                <CodeBlock code={`export STATEJAR_URL=${base}\nexport STATEJAR_KEY=${apiKey}`} label="exports" />
+              </li>
+              <li>
+                <strong>Store something.</strong>
+                <LangTabs value={language} onChange={pickLanguage} />
+                <CodeBlock
+                  code={snippetFor(language, {
+                    base, key: apiKey, method: 'POST', path: '/api/v1/memory/ingest',
+                    body: { session_tag: 'user-42', text: 'I prefer email, budget under 2000.' },
+                  })}
+                  label="quickstart ingest"
+                />
+              </li>
+              <li>
+                <strong>Ask for it back</strong> — note how little comes out.
+                <CodeBlock
+                  code={snippetFor(language, {
+                    base, key: apiKey, method: 'POST', path: '/api/v1/memory/query',
+                    body: { session_tag: 'user-42', query: 'What is my budget?', audit: true },
+                  })}
+                  label="quickstart query"
+                />
+              </li>
+            </ol>
+          </section>
 
-        <Step n="4" title="Chat — let StateJar assemble the context">
-          <p className="docs-note">
-            Needs a provider key saved on the <Link to="/api-keys">API Keys</Link> page.
-            StateJar retrieves the minimal subset, builds the system context, calls the
-            model and writes the audit row in one round trip.
-          </p>
-          <Snippet code={CURL.chat(base, key)} />
-          <p className="docs-label">Response</p>
-          <Snippet code={RESPONSES.chat} />
-        </Step>
+          {/* 4 */}
+          <section id="endpoints" className="docs-section">
+            <h2>Endpoints</h2>
+            {ENDPOINTS.map((endpoint) => (
+              <EndpointCard
+                key={endpoint.id} endpoint={endpoint} base={base} apiKey={apiKey}
+                language={language} onLanguage={pickLanguage}
+              />
+            ))}
+          </section>
 
-        <Step n="5" title="Everything else">
-          <div className="table-scroll">
-            <table className="docs-table">
-              <thead>
-                <tr><th>Method</th><th>Path</th><th>Purpose</th></tr>
-              </thead>
-              <tbody>
-                {ENDPOINTS.map(([m, p, why]) => (
-                  <tr key={p}>
-                    <td className="mono">{m}</td>
-                    <td className="mono">{p}</td>
-                    <td>{why}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <p className="docs-note">
-            An API key authenticates the data plane only. Minting keys, listing them
-            and reading your provider key stay console-only, so a leaked key cannot
-            mint a successor or spend your provider credit. Rate limit on{' '}
-            <span className="mono">/chat</span> is 60/hour per key; over it returns{' '}
-            <span className="mono">429</span>. Errors are always{' '}
-            <span className="mono">{'{"detail": "…"}'}</span>.
-          </p>
-          <p className="docs-note">
-            Full reference: <span className="mono">docs/api.md</span> in the repo, or the
-            interactive schema at <span className="mono">{base}/docs</span>.
-          </p>
-        </Step>
+          {/* 6 */}
+          <section id="concepts" className="docs-section">
+            <h2>Concepts</h2>
+            <div className="concept-grid">
+              {CONCEPTS.map((concept) => (
+                <div className="concept-card" key={concept.id}>
+                  <h3>{concept.title}</h3>
+                  <p>{concept.body}</p>
+                  <pre className="concept-diagram mono">{concept.diagram}</pre>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          {/* 7 */}
+          <section id="errors" className="docs-section">
+            <h2>Errors</h2>
+            <p className="docs-note">
+              Every error is <span className="mono">{'{"detail": "…"}'}</span>, and the
+              detail is written to be actionable rather than generic.
+            </p>
+            <div className="table-scroll">
+              <table className="docs-table">
+                <thead><tr><th>Status</th><th>Meaning</th><th>How to fix</th></tr></thead>
+                <tbody>
+                  {ERROR_CODES.map(([code, meaning, fix]) => (
+                    <tr key={code}>
+                      <td className="mono"><span className={`status-pill s${code[0]}`}>{code}</span></td>
+                      <td>{meaning}</td>
+                      <td>{fix}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          {/* 8 */}
+          <section id="rate-limits" className="docs-section">
+            <h2>Rate limits</h2>
+            <div className="table-scroll">
+              <table className="docs-table">
+                <thead><tr><th>Endpoint</th><th>Limit</th><th>Keyed by</th></tr></thead>
+                <tbody>
+                  {RATE_LIMITS.map(([endpoint, limit, keyed]) => (
+                    <tr key={endpoint}>
+                      <td className="mono">{endpoint}</td>
+                      <td>{limit}</td>
+                      <td>{keyed}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="docs-note">
+              Chat is keyed per API key, so one integration cannot exhaust another's
+              budget. Over the limit returns <span className="mono">429</span>.
+            </p>
+          </section>
+
+          {/* 9 */}
+          <section id="sdk" className="docs-section">
+            <h2>SDK snippet</h2>
+            <p className="docs-note">
+              No package to install — paste this into your project and you have a
+              client.
+            </p>
+            <CodeBlock code={SDK_SNIPPET} label="python sdk" />
+          </section>
+        </div>
       </div>
     </>
   )

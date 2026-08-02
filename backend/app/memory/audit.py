@@ -125,19 +125,98 @@ class AuditLogger:
             )
 
     def get_audit_trail(
-        self, user_id: int, limit: int = 50, session_tag: str | None = None
+        self,
+        user_id: int,
+        limit: int = 50,
+        session_tag: str | None = None,
+        provider: str | None = None,
+        search: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        offset: int = 0,
+        include_demo: bool = True,
     ) -> list[dict[str, Any]]:
-        """Newest-first audit entries for a user, optionally one session's only."""
-        stmt = (
-            select(audit_logs)
-            .where(audit_logs.c.user_id == user_id)
-            .order_by(audit_logs.c.created_at.desc(), audit_logs.c.id.desc())
-            .limit(limit)
+        """Newest-first audit entries for a user, filtered and paged."""
+        stmt = select(audit_logs).where(audit_logs.c.user_id == user_id)
+        stmt = self._apply_filters(
+            stmt, session_tag, provider, search, since, until, include_demo
         )
-        if session_tag is not None:
-            stmt = stmt.where(audit_logs.c.session_tag == session_tag)
+        stmt = stmt.order_by(
+            audit_logs.c.created_at.desc(), audit_logs.c.id.desc()
+        ).limit(limit).offset(offset)
         with self._engine.connect() as conn:
             return [dict(r) for r in conn.execute(stmt).mappings()]
+
+    def count_audit_trail(
+        self,
+        user_id: int,
+        session_tag: str | None = None,
+        provider: str | None = None,
+        search: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        include_demo: bool = True,
+    ) -> int:
+        """Total matching rows, so the client knows whether more remain."""
+        from sqlalchemy import func
+
+        stmt = select(func.count()).select_from(audit_logs).where(
+            audit_logs.c.user_id == user_id
+        )
+        stmt = self._apply_filters(
+            stmt, session_tag, provider, search, since, until, include_demo
+        )
+        with self._engine.connect() as conn:
+            return int(conn.execute(stmt).scalar_one())
+
+    @staticmethod
+    def _apply_filters(
+        stmt: Any,
+        session_tag: str | None,
+        provider: str | None,
+        search: str | None,
+        since: datetime | None,
+        until: datetime | None,
+        include_demo: bool,
+    ) -> Any:
+        if session_tag is not None:
+            stmt = stmt.where(audit_logs.c.session_tag == session_tag)
+        if provider:
+            stmt = stmt.where(audit_logs.c.provider == provider)
+        if not include_demo:
+            stmt = stmt.where(audit_logs.c.provider != "demo")
+        if since is not None:
+            stmt = stmt.where(audit_logs.c.created_at >= since)
+        if until is not None:
+            stmt = stmt.where(audit_logs.c.created_at <= until)
+        if search:
+            # a handle or a request id — the two things someone pastes in
+            like = f"%{search.strip()}%"
+            stmt = stmt.where(
+                audit_logs.c.handle_used.like(like) | audit_logs.c.request_id.like(like)
+            )
+        return stmt
+
+    def list_providers(self, user_id: int) -> list[str]:
+        """Providers this user has actually used, for the filter dropdown."""
+        stmt = (
+            select(audit_logs.c.provider)
+            .where(audit_logs.c.user_id == user_id)
+            .where(audit_logs.c.provider.is_not(None))
+            .distinct()
+        )
+        with self._engine.connect() as conn:
+            return sorted(str(p) for p in conn.execute(stmt).scalars())
+
+    def list_sessions(self, user_id: int) -> list[str]:
+        stmt = (
+            select(audit_logs.c.session_tag)
+            .where(audit_logs.c.user_id == user_id)
+            .where(audit_logs.c.session_tag.is_not(None))
+            .distinct()
+        )
+        with self._engine.connect() as conn:
+            return sorted(str(s) for s in conn.execute(stmt).scalars())
 
     def replay(self, request_id: str, user_id: int | None = None) -> dict[str, Any] | None:
         """Reconstruct exactly which handle + subset was used for a request.

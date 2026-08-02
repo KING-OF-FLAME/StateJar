@@ -60,7 +60,13 @@ function Replay({ entry }) {
       {open && (
         <div className="tl-replay-body">
           {loading && <p className="empty-note">Reconstructing…</p>}
-          {error && <p className="auth-error">{error}</p>}
+          {error && (
+            <p className={/404|unknown/i.test(error) ? 'tl-gone' : 'auth-error'}>
+              {/404|unknown/i.test(error)
+                ? 'That memory version no longer exists, so this disclosure cannot be reconstructed.'
+                : error}
+            </p>
+          )}
           {data && (
             <>
               <div className="tl-verify">
@@ -88,24 +94,30 @@ function Replay({ entry }) {
   )
 }
 
-export default function AuditTimeline({ entries, scope, onScope, onCopyHandle, highlightId }) {
+export default function AuditTimeline({
+  entries, scope, onScope, onCopyHandle, highlightId, showEmptyState = true,
+}) {
   const order = {}
 
   return (
     <>
-      <div className="audit-scope" role="group" aria-label="Audit scope">
-        <button className={scope === 'session' ? 'active' : ''} onClick={() => onScope('session')}>
-          This session
-        </button>
-        <button className={scope === 'all' ? 'active' : ''} onClick={() => onScope('all')}>
-          All sessions
-        </button>
-      </div>
+      {onScope && (
+        <div className="audit-scope" role="group" aria-label="Audit scope">
+          <button className={scope === 'session' ? 'active' : ''} onClick={() => onScope('session')}>
+            This session
+          </button>
+          <button className={scope === 'all' ? 'active' : ''} onClick={() => onScope('all')}>
+            All sessions
+          </button>
+        </div>
+      )}
 
       {!entries.length ? (
-        <p className="empty-note">
-          No audited responses yet — run the demo or send a message.
-        </p>
+        showEmptyState ? (
+          <p className="empty-note">
+            No audited responses yet — run the demo or send a message.
+          </p>
+        ) : null
       ) : (
         <ol className="tl">
           {entries.map((a) => (
@@ -119,9 +131,13 @@ export default function AuditTimeline({ entries, scope, onScope, onCopyHandle, h
               />
               <div className="tl-card">
                 <div className="tl-card-head">
-                  <span className="mono tl-req" title={a.request_id}>
+                  <button
+                    type="button" className="mono tl-req" title={`Copy ${a.request_id}`}
+                    onClick={() => navigator.clipboard?.writeText(a.request_id)}
+                  >
                     {a.request_id.slice(0, 12)}…
-                  </span>
+                  </button>
+                  {a.is_demo && <span className="chip-demo">demo</span>}
                   <span className="tl-when" title={new Date(a.created_at).toLocaleString()}>
                     {relativeTime(a.created_at)}
                   </span>
@@ -142,12 +158,17 @@ export default function AuditTimeline({ entries, scope, onScope, onCopyHandle, h
                     <span className="chip mono" key={k}>{k}</span>
                   ))}
                   {!(a.subset_keys || []).length && (
-                    <span className="empty-note">nothing disclosed</span>
+                    <span className="tl-nothing" title={a.disclosure_note || undefined}>
+                      nothing disclosed
+                      {a.disclosure_note && (
+                        <span className="tl-why"> — {a.disclosure_note}</span>
+                      )}
+                    </span>
                   )}
                 </div>
 
                 <div className="tl-meta">
-                  {scope === 'all' && a.session_tag ? `${a.session_tag} · ` : ''}
+                  {a.session_tag ? `${a.session_tag} · ` : ''}
                   {a.provider} · {a.model}
                 </div>
 

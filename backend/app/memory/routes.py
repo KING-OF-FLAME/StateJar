@@ -52,6 +52,16 @@ class QueryRequest(BaseModel):
     audit: bool = False
 
 
+class ManualAuditIn(BaseModel):
+    """A disclosure made by the client rather than by this server."""
+
+    session_tag: str = Field(min_length=1, max_length=100)
+    handle_used: str = Field(min_length=4, max_length=80)
+    subset_keys: list[str] = Field(default_factory=list)
+    provider: str = Field(default="ollama", max_length=50)
+    model: str = Field(default="", max_length=100)
+
+
 class ChatRequest(QueryRequest):
     # Explicitly namespaced: a bare "openai/gpt-4o-mini" is a valid OpenRouter
     # id *and* an OpenAI routing prefix, so the default spells out which one it
@@ -330,17 +340,127 @@ def audit_replay(
     return replayed
 
 
-@router.get("/audit")
-def audit_trail(
-    limit: int = 50,
-    session_tag: str | None = None,
+def _disclosure_note(entry: dict[str, Any]) -> str | None:
+    """Why an entry disclosed nothing.
+
+    "nothing disclosed" on its own reads like a bug. It is almost always one
+    of two ordinary situations, and saying which is the difference between a
+    trustworthy trail and a confusing one.
+    """
+    if entry.get("subset_keys"):
+        return None
+    if not entry.get("handle_used"):
+        return "no memory existed yet — nothing had been stored for this user"
+    return (
+        "the query matched no stored field — retrieval is minimal by design, "
+        "so an unrelated question discloses nothing"
+    )
+
+
+@router.post("/audit/manual", status_code=status.HTTP_201_CREATED)
+def audit_manual(
+    body: ManualAuditIn,
     user: UserOut = Depends(get_api_caller),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    entries = _audit(db).get_audit_trail(user.id, limit=limit, session_tag=session_tag)
-    for e in entries:
-        e["created_at"] = iso_utc(e["created_at"])
-    return {"entries": entries}
+    """Record a disclosure StateJar's server did not make itself.
+
+    Browser-direct local models never touch this backend — the prompt goes
+    straight from the user's browser to their own Ollama daemon, which is the
+    whole point. The retrieval still happened here, so the audit trail would
+    otherwise have a hole exactly where the privacy story is strongest.
+
+    The handle and subset keys are re-verified against what this user
+    actually owns, so a client cannot invent provenance.
+    """
+    store = _store(db)
+    row = store.get_state(body.handle_used, user_id=user.id)
+    if row is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "unknown handle for this user"
+        )
+    known = set(_subset_from_keys(row["state_json"], body.subset_keys))
+    state = row["state_json"]
+    verified = [
+        key for key in body.subset_keys
+        if key.partition(".")[0] in state or key.partition(".")[0] in known
+    ]
+
+    request_id = uuid.uuid4().hex
+    _audit(db).log_response(
+        request_id=request_id,
+        user_id=user.id,
+        handle_used=body.handle_used,
+        subset_keys=verified,
+        provider=body.provider,
+        model=body.model,
+        schema_version=SCHEMA_VERSION,
+        norm_version=NORM_VERSION,
+        session_tag=body.session_tag,
+    )
+    return {"audit_id": request_id, "subset_keys": verified}
+
+
+@router.get("/audit/facets")
+def audit_facets(
+    user: UserOut = Depends(get_api_caller),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Values that actually appear in this user's trail, for the filter bar."""
+    logger = _audit(db)
+    return {
+        "providers": logger.list_providers(user.id),
+        "sessions": logger.list_sessions(user.id),
+    }
+
+
+@router.get("/audit")
+def audit_trail(
+    limit: int = 50,
+    offset: int = 0,
+    session_tag: str | None = None,
+    provider: str | None = None,
+    search: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    include_demo: bool = True,
+    user: UserOut = Depends(get_api_caller),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    logger = _audit(db)
+    bounds = {"since": _parse_dt(since), "until": _parse_dt(until)}
+    filters = dict(
+        session_tag=session_tag, provider=provider, search=search,
+        include_demo=include_demo, **bounds,
+    )
+    entries = logger.get_audit_trail(
+        user.id, limit=min(limit, 200), offset=max(offset, 0), **filters
+    )
+    for entry in entries:
+        entry["created_at"] = iso_utc(entry["created_at"])
+        entry["is_demo"] = entry.get("provider") == "demo"
+        entry["disclosure_note"] = _disclosure_note(entry)
+    total = logger.count_audit_trail(user.id, **filters)
+    return {
+        "entries": entries,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "has_more": offset + len(entries) < total,
+    }
+
+
+def _parse_dt(value: str | None) -> Any:
+    """An ISO date or datetime from a query string, or None."""
+    if not value:
+        return None
+    from datetime import datetime
+
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=None) if parsed.tzinfo else parsed
 
 
 # --- developer API usage ------------------------------------------------------

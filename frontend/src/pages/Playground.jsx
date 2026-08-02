@@ -3,6 +3,9 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import AuditTimeline from '../components/AuditTimeline.jsx'
 import Pipeline, { canonicalPreview, countFields, usePipeline } from '../components/Pipeline.jsx'
+import {
+  chatLocal, classifyError, isLocalHost, listLocalModels, normaliseBase,
+} from '../lib/ollama.js'
 
 const CUSTOM_MODEL = '__custom__'
 const OLLAMA_PREFIX = 'ollama/'
@@ -407,7 +410,8 @@ export default function Playground() {
   const [versions, setVersions] = useState([])
   const [inspected, setInspected] = useState(null)  // old state being inspected
   const [audit, setAudit] = useState([])
-  const [newAuditId, setNewAuditId] = useState(null)   // newest row, highlighted after a demo
+  const [newAuditId, setNewAuditId] = useState(null)
+  const [ollamaBase, setOllamaBase] = useState(null)  // set when browser-direct   // newest row, highlighted after a demo
   const [demoSummary, setDemoSummary] = useState(null) // {turns, savedPct} once a run finishes
   const pipe = usePipeline()
   const [pulse, setPulse] = useState(0)             // animation trigger
@@ -466,6 +470,33 @@ export default function Playground() {
         })
       })
       .catch(() => setGroups([]))
+  }, [])
+
+  /* Local models are enumerated by the browser, not the backend: a hosted
+     StateJar can never see http://localhost:11434, but the user's own tab
+     can. The list is therefore whatever they have actually pulled. */
+  useEffect(() => {
+    let cancelled = false
+    api('/keys/provider')
+      .then(async (keys) => {
+        const saved = keys.find((k) => k.provider === 'ollama')
+        const base = normaliseBase(saved?.config?.base_url)
+        if (saved?.has_key || !isLocalHost(base)) return   // server-side mode
+        setOllamaBase(base)
+        try {
+          const models = await listLocalModels(base)
+          if (!cancelled && models.length) {
+            setGroups((prev) => [
+              ...prev.filter((g) => g.provider !== 'ollama'),
+              { provider: 'ollama', label: 'Ollama (local)', free: models, paid: [] },
+            ])
+          }
+        } catch {
+          /* daemon down or CORS-blocked — the API Keys page explains the fix */
+        }
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
   }, [])
 
   const editCustomModel = (value) => {
@@ -610,10 +641,12 @@ export default function Playground() {
         payload: { subset_keys: keys, subset: q.subset },
       }]])
 
-      // 3. chat via the user's provider key
+      // 3. chat — locally for ollama/*, otherwise via our gateway
       const payload = { session_tag: session, query: text, model: effectiveModel }
       try {
-        const c = await chatWithRetry(payload)
+        const c = ollamaBase && effectiveModel.startsWith(OLLAMA_PREFIX)
+          ? await chatBrowserDirect(text, q, effectiveModel)
+          : await chatWithRetry(payload)
         addMsg({ role: 'assistant', content: c.response })
         // the audit row exists only once a response was actually served
         pipe.complete([['audit', {
@@ -629,6 +662,43 @@ export default function Playground() {
       addMsg({ role: 'assistant', error: true, content: err.message })
     } finally {
       setBusy(false)
+    }
+  }
+
+  /* The prompt goes straight from this browser to the user's own daemon,
+     so it never reaches our servers. The retrieval already happened here, so
+     the disclosure is posted back to keep the audit trail complete. */
+  const chatBrowserDirect = async (text, retrieved, model) => {
+    const bare = model.slice(OLLAMA_PREFIX.length)
+    let result
+    try {
+      result = await chatLocal({
+        baseUrl: ollamaBase,
+        model: bare,
+        systemContext:
+          `Known user state (retrieved via StateJar handle ${retrieved.handle_used}): ` +
+          `${JSON.stringify(retrieved.subset)}\n\nReply in plain conversational ` +
+          'language. Never output JSON or internal state.',
+        userMessage: text,
+      })
+    } catch (err) {
+      const { message } = classifyError(err, ollamaBase)
+      throw new Error(message)
+    }
+    const audited = await api('/audit/manual', {
+      method: 'POST',
+      body: {
+        session_tag: session,
+        handle_used: retrieved.handle_used,
+        subset_keys: retrieved.metadata?.subset_keys || [],
+        provider: 'ollama',
+        model: bare,
+      },
+    }).catch(() => ({ audit_id: null }))
+    return {
+      response: result.text,
+      audit_id: audited.audit_id,
+      subset_keys: retrieved.metadata?.subset_keys || [],
     }
   }
 

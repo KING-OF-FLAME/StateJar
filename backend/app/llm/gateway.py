@@ -396,6 +396,10 @@ class SavedKeyOut(BaseModel):
     provider: str
     key_last4: str
     created_at: str
+    # Ollama stores a base URL (and optionally a key) rather than one secret,
+    # so the console needs the non-secret half back to pre-fill its card.
+    config: dict[str, Any] | None = None
+    has_key: bool = True
 
 
 @router.get("/provider", response_model=list[SavedKeyOut])
@@ -420,11 +424,24 @@ def list_provider_keys(
         if row["provider"] in seen:
             continue
         seen.add(row["provider"])
+        secret = decrypt_key(row["encrypted_key"])
+        config = None
+        has_key = True
+        if row["provider"] == "ollama":
+            base_url, key = get_provider("ollama").parse_config(secret)
+            # Only a real URL is echoed back. A legacy row holds a bare string
+            # that was *meant* to be a base URL — but if it is not one, it may
+            # be anything, and this response must never return a stored secret.
+            safe_url = base_url if base_url.startswith(("http://", "https://")) else ""
+            config = {"base_url": safe_url}
+            has_key = bool(key)
         out.append(
             SavedKeyOut(
                 provider=row["provider"],
-                key_last4=decrypt_key(row["encrypted_key"])[-4:],
+                key_last4=secret[-4:],
                 created_at=iso_utc(row["created_at"]),
+                config=config,
+                has_key=has_key,
             )
         )
     return out

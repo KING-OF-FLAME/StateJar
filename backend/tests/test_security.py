@@ -438,3 +438,35 @@ def test_known_origin_is_allowed(client: TestClient) -> None:
         },
     )
     assert resp.headers.get("access-control-allow-origin") == "https://statejar.com"
+
+
+# --- deployment safety --------------------------------------------------------
+
+
+def test_ml_extras_stay_out_of_requirements() -> None:
+    """Railway installs requirements.txt only.
+
+    torch alone is multi-GB; letting it into the production manifest turns a
+    30-second build into one that times out. The optional tiers live in
+    requirements-ml.txt and degrade silently when absent, so this separation
+    is load-bearing rather than tidiness. It has been broken by an editor
+    once already, hence a test rather than a habit.
+    """
+    backend = Path(__file__).resolve().parent.parent
+    production = (backend / "requirements.txt").read_text(encoding="utf-8").lower()
+    heavy = ("torch", "gliner", "sentence-transformers", "transformers", "nvidia-")
+
+    offenders = [
+        line.strip()
+        for line in production.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+        and any(pkg in line for pkg in heavy)
+    ]
+    assert offenders == [], (
+        f"ML extras must stay in requirements-ml.txt, found: {offenders}"
+    )
+
+    # and they must actually be declared somewhere, or the tiers are dead code
+    optional = (backend / "requirements-ml.txt").read_text(encoding="utf-8").lower()
+    for pkg in ("torch", "gliner", "sentence-transformers"):
+        assert pkg in optional, f"{pkg} missing from requirements-ml.txt"

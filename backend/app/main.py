@@ -77,6 +77,24 @@ def _ensure_tables() -> None:
                     conn.execute(
                         text("ALTER TABLE audit_logs ADD COLUMN session_tag VARCHAR(100) NULL")
                     )
+
+        # 005: API key lifecycle. All nullable, so existing keys keep working —
+        # a NULL expires_at reads as "never expires", which is what every key
+        # issued before this migration was.
+        if "api_keys" in inspector.get_table_names():
+            columns = {c["name"] for c in inspector.get_columns("api_keys")}
+            # literal statements, not built from parts: raw SQL in this repo is
+            # always a constant (see test_no_dynamically_built_sql_in_app_code)
+            additions = (
+                ("label", text("ALTER TABLE api_keys ADD COLUMN label VARCHAR(100) NULL")),
+                ("expires_at", text("ALTER TABLE api_keys ADD COLUMN expires_at DATETIME NULL")),
+                ("last_used_at", text("ALTER TABLE api_keys ADD COLUMN last_used_at DATETIME NULL")),
+            )
+            missing = [stmt for name, stmt in additions if name not in columns]
+            if missing:
+                with engine.begin() as conn:
+                    for statement in missing:
+                        conn.execute(statement)
     except Exception:  # noqa: BLE001 — DB down at boot must not kill the app
         pass
 

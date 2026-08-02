@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api.js'
+import OllamaCard from './OllamaCard.jsx'
 
 /* One card per provider. Keys are write-only: once saved the console only
    ever sees the last four characters, so "Replace" is a fresh save rather
@@ -30,13 +31,6 @@ export const PROVIDERS = [
     placeholder: 'AIza…',
     help: 'Google AI Studio — aistudio.google.com/apikey',
   },
-  {
-    id: 'ollama',
-    label: 'Ollama',
-    local: true,
-    placeholder: 'http://localhost:11434',
-    help: 'Runs on your own machine — no key, no egress. Start it with `ollama serve`.',
-  },
 ]
 
 const DEFAULT_OLLAMA_URL = 'http://localhost:11434'
@@ -47,8 +41,9 @@ function ProviderCard({ provider, saved, onChanged }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [tested, setTested] = useState(null) // {ok, model_count|error}
+  const [verifiedAt, setVerifiedAt] = useState(null)
 
-  const showForm = provider.local || !saved || editing
+  const showForm = !saved || editing
 
   const save = async (e) => {
     e?.preventDefault()
@@ -90,7 +85,9 @@ function ProviderCard({ provider, saved, onChanged }) {
     setError('')
     setBusy(true)
     try {
-      setTested(await api(`/keys/provider/${provider.id}/test`, { method: 'POST' }))
+      const out = await api(`/keys/provider/${provider.id}/test`, { method: 'POST' })
+      setTested(out)
+      if (out.ok) setVerifiedAt(new Date())
     } catch (err) {
       setTested({ ok: false, error: err.message })
     } finally {
@@ -108,8 +105,11 @@ function ProviderCard({ provider, saved, onChanged }) {
 
       {saved && !editing && (
         <div className="prov-saved">
-          <span className="mono">
-            {provider.local ? `…${saved.key_last4}` : `sk-••••••••${saved.key_last4}`}
+          <span className="mono">sk-••••••••{saved.key_last4}</span>
+          <span className="prov-verified">
+            {verifiedAt
+              ? `verified just now`
+              : `added ${new Date(saved.created_at).toLocaleDateString()}`}
           </span>
         </div>
       )}
@@ -117,23 +117,18 @@ function ProviderCard({ provider, saved, onChanged }) {
       {showForm && (
         <form onSubmit={save} className="prov-form">
           <input
-            type={provider.local ? 'text' : 'password'}
+            type="password"
             className="mono"
             value={value}
             onChange={(e) => setValue(e.target.value)}
             placeholder={provider.placeholder}
             autoComplete="off"
-            aria-label={provider.local ? `${provider.label} base URL` : `${provider.label} API key`}
+            aria-label={`${provider.label} API key`}
           />
           <div className="prov-actions">
             <button className="btn btn-primary" disabled={busy || !value.trim()}>
-              {busy ? '…' : provider.local ? 'Save URL' : 'Save'}
+              {busy ? '…' : 'Save'}
             </button>
-            {provider.local && (
-              <button type="button" className="btn btn-ghost" onClick={test} disabled={busy}>
-                Test connection
-              </button>
-            )}
             {editing && (
               <button type="button" className="btn btn-ghost" onClick={() => setEditing(false)}>
                 Cancel
@@ -143,7 +138,7 @@ function ProviderCard({ provider, saved, onChanged }) {
         </form>
       )}
 
-      {saved && !editing && !provider.local && (
+      {saved && !editing && (
         <div className="prov-actions">
           <button className="btn btn-ghost" onClick={() => setEditing(true)} disabled={busy}>
             Replace
@@ -157,16 +152,9 @@ function ProviderCard({ provider, saved, onChanged }) {
         </div>
       )}
 
-      {saved && provider.local && (
-        <div className="prov-actions">
-          <button className="btn btn-ghost" onClick={remove} disabled={busy}>
-            Reset to default
-          </button>
-        </div>
-      )}
-
       {tested && (
         <p className={tested.ok ? 'prov-ok' : 'auth-error'}>
+          <span className="prov-mark" aria-hidden="true">{tested.ok ? '✓' : '✕'}</span>{' '}
           {tested.ok
             ? `Connected — ${tested.model_count} model${tested.model_count === 1 ? '' : 's'} available.`
             : tested.error}
@@ -216,6 +204,7 @@ export default function ProviderCards() {
               onChanged={load}
             />
           ))}
+          <OllamaCard saved={saved.ollama || null} onChanged={load} />
         </div>
       )}
     </div>

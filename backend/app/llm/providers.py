@@ -20,6 +20,7 @@ a response body or a log line.
 
 from __future__ import annotations
 
+import json
 import re
 import time
 from abc import ABC, abstractmethod
@@ -473,9 +474,39 @@ class OllamaProvider(LLMProvider):
         # read per call so a redeploy / test can repoint the daemon
         return get_settings().ollama_base_url.rstrip("/")
 
+    @staticmethod
+    def parse_config(stored: str | None) -> tuple[str, str]:
+        """(base_url_override, api_key) from whatever is saved for this user.
+
+        Ollama needs two values where every other provider needs one, so the
+        row holds a small JSON document. A bare string is still accepted and
+        read as a base URL, which is what earlier versions stored.
+        """
+        raw = (stored or "").strip()
+        if not raw:
+            return "", ""
+        if raw.startswith("{"):
+            try:
+                parsed = json.loads(raw)
+            except (json.JSONDecodeError, ValueError):
+                return "", ""
+            if isinstance(parsed, dict):
+                return (
+                    str(parsed.get("base_url") or "").strip(),
+                    str(parsed.get("api_key") or "").strip(),
+                )
+            return "", ""
+        return raw, ""
+
     def _resolve_base(self, override: str | None) -> str:
-        candidate = (override or "").strip().rstrip("/")
+        candidate, _ = self.parse_config(override)
+        candidate = candidate.rstrip("/")
         return candidate if candidate.startswith(("http://", "https://")) else self.base_url
+
+    def _headers(self, stored: str | None) -> dict[str, str]:
+        """A remote/cloud Ollama can require a bearer token; a local one never does."""
+        _, api_key = self.parse_config(stored)
+        return {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
     def chat(
         self, api_key: str, model: str, system_context: str, user_message: str
@@ -492,7 +523,8 @@ class OllamaProvider(LLMProvider):
         started = time.perf_counter()
         try:
             response = httpx.post(
-                f"{base_url}/api/chat", json=payload, timeout=self._timeout
+                f"{base_url}/api/chat", json=payload,
+                headers=self._headers(api_key), timeout=self._timeout,
             )
         except httpx.ConnectError as exc:
             raise ProviderUnavailableError(
@@ -515,7 +547,10 @@ class OllamaProvider(LLMProvider):
     def list_models(self, api_key: str) -> list[dict[str, Any]]:
         base_url = self._resolve_base(api_key)
         try:
-            response = httpx.get(f"{base_url}/api/tags", timeout=_CATALOG_TIMEOUT)
+            response = httpx.get(
+                f"{base_url}/api/tags", headers=self._headers(api_key),
+                timeout=_CATALOG_TIMEOUT,
+            )
         except httpx.ConnectError as exc:
             raise ProviderUnavailableError(
                 f"Ollama not reachable at {base_url} — is `ollama serve` running?"

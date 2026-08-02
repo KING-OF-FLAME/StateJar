@@ -1,21 +1,84 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../lib/api.js'
+import AuditTimeline from '../components/AuditTimeline.jsx'
 
-/* Patent module 10 — auditable replay. Every disclosure is recorded with the
-   exact handle and the exact fields that reached the model. */
+/* Patent module 10 — auditable replay, as a provenance timeline.
+   Filters are server-side so they work past the first page, and the export
+   reflects the filtered view rather than whatever happens to be loaded. */
+
+const PAGE_SIZE = 50
+
+function isoDay(value) {
+  return value ? `${value}T00:00:00` : ''
+}
+
 export default function AuditLog() {
-  const [entries, setEntries] = useState(null) // null = loading
+  const [entries, setEntries] = useState(null)
+  const [total, setTotal] = useState(0)
+  const [hasMore, setHasMore] = useState(false)
   const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [facets, setFacets] = useState({ providers: [], sessions: [] })
 
+  const [session, setSession] = useState('')
+  const [provider, setProvider] = useState('')
+  const [search, setSearch] = useState('')
+  const [since, setSince] = useState('')
+  const [until, setUntil] = useState('')
+  const [includeDemo, setIncludeDemo] = useState(true)
+
+  const query = useMemo(() => {
+    const params = new URLSearchParams({ limit: String(PAGE_SIZE) })
+    if (session) params.set('session_tag', session)
+    if (provider) params.set('provider', provider)
+    if (search.trim()) params.set('search', search.trim())
+    if (since) params.set('since', isoDay(since))
+    if (until) params.set('until', `${until}T23:59:59`)
+    if (!includeDemo) params.set('include_demo', 'false')
+    return params
+  }, [session, provider, search, since, until, includeDemo])
+
+  const load = useCallback(async (offset = 0) => {
+    setLoading(true)
+    setError('')
+    try {
+      const params = new URLSearchParams(query)
+      params.set('offset', String(offset))
+      const data = await api(`/audit?${params.toString()}`)
+      setEntries((prev) => (offset === 0 ? data.entries : [...(prev || []), ...data.entries]))
+      setTotal(data.total)
+      setHasMore(data.has_more)
+    } catch (err) {
+      setError(err.message)
+      setEntries([])
+    } finally {
+      setLoading(false)
+    }
+  }, [query])
+
+  useEffect(() => { load(0) }, [load])
   useEffect(() => {
-    api('/audit?limit=100')
-      .then((data) => setEntries(data.entries || []))
-      .catch((e) => {
-        setError(e.message)
-        setEntries([])
-      })
+    api('/audit/facets').then(setFacets).catch(() => {})
   }, [])
+
+  const exportJson = () => {
+    const blob = new Blob([JSON.stringify(entries || [], null, 2)],
+      { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `statejar-audit-${new Date().toISOString().slice(0, 10)}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const clearFilters = () => {
+    setSession(''); setProvider(''); setSearch('')
+    setSince(''); setUntil(''); setIncludeDemo(true)
+  }
+
+  const filtered = session || provider || search || since || until || !includeDemo
 
   return (
     <>
@@ -32,45 +95,84 @@ export default function AuditLog() {
 
       {error && <p className="auth-error">{error}</p>}
 
+      <div className="filters" role="search">
+        <input
+          type="search" className="filter-search"
+          value={search} onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search handle or request id…"
+          aria-label="Search handle or request id"
+        />
+        <select value={session} onChange={(e) => setSession(e.target.value)}
+          aria-label="Session">
+          <option value="">All sessions</option>
+          {facets.sessions.map((s) => <option key={s} value={s}>{s}</option>)}
+        </select>
+        <select value={provider} onChange={(e) => setProvider(e.target.value)}
+          aria-label="Provider">
+          <option value="">All providers</option>
+          {facets.providers.map((p) => <option key={p} value={p}>{p}</option>)}
+        </select>
+        <label className="filter-date">
+          From
+          <input type="date" value={since} onChange={(e) => setSince(e.target.value)} />
+        </label>
+        <label className="filter-date">
+          To
+          <input type="date" value={until} onChange={(e) => setUntil(e.target.value)} />
+        </label>
+        <label className="filter-check">
+          <input
+            type="checkbox" checked={includeDemo}
+            onChange={(e) => setIncludeDemo(e.target.checked)}
+          />
+          Show demo entries
+        </label>
+        {filtered && (
+          <button className="btn btn-ghost filter-clear" onClick={clearFilters}>
+            Clear
+          </button>
+        )}
+      </div>
+
+      <div className="filters-meta">
+        <span className="empty-note">
+          {entries === null
+            ? 'Loading…'
+            : `${entries.length} of ${total} ${total === 1 ? 'entry' : 'entries'}`}
+        </span>
+        <button
+          className="btn btn-ghost" onClick={exportJson}
+          disabled={!entries?.length}
+        >
+          Export as JSON
+        </button>
+      </div>
+
       <div className="panel">
         {entries === null ? (
           <p className="empty-note">Loading audit trail…</p>
-        ) : entries.length === 0 ? (
-          <p className="empty-note">
-            No disclosures recorded yet. Every query and chat writes one row here —{' '}
-            <Link to="/playground">send a message →</Link>
-          </p>
         ) : (
           <>
-            <p className="empty-note" style={{ marginTop: 0 }}>
-              {entries.length} most recent {entries.length === 1 ? 'entry' : 'entries'},
-              newest first.
-            </p>
-            <div className="audit-list">
-              {entries.map((a) => (
-                <div className="audit-row" key={a.request_id}>
-                  <div className="mono audit-id" title={a.request_id}>
-                    {a.request_id.slice(0, 12)}…
-                  </div>
-                  <div className="mono audit-handle" title={a.handle_used || ''}>
-                    {a.handle_used ? `${a.handle_used.slice(0, 22)}…` : '—'}
-                  </div>
-                  <div className="pg-chips">
-                    {(a.subset_keys || []).map((k) => (
-                      <span className="chip mono" key={k}>{k}</span>
-                    ))}
-                    {(a.subset_keys || []).length === 0 && (
-                      <span className="empty-note">nothing disclosed</span>
-                    )}
-                  </div>
-                  <div className="audit-meta">
-                    {a.session_tag ? `${a.session_tag} · ` : ''}
-                    {a.provider} · {a.model} ·{' '}
-                    {new Date(a.created_at).toLocaleString()}
-                  </div>
-                </div>
-              ))}
-            </div>
+            <AuditTimeline
+              entries={entries}
+              showEmptyState={!filtered}
+              onCopyHandle={(h) => navigator.clipboard.writeText(h)}
+            />
+            {entries.length === 0 && filtered && (
+              <p className="empty-note">
+                No entries match these filters.{' '}
+                <button className="link-btn" onClick={clearFilters}>Clear them</button>
+              </p>
+            )}
+            {hasMore && (
+              <button
+                className="btn btn-ghost load-more"
+                onClick={() => load(entries.length)}
+                disabled={loading}
+              >
+                {loading ? 'Loading…' : `Load ${Math.min(PAGE_SIZE, total - entries.length)} more`}
+              </button>
+            )}
           </>
         )}
       </div>

@@ -215,7 +215,11 @@ def test_revoked_key_stops_working_immediately(client: TestClient) -> None:
     assert client.post(
         INGEST, json={"session_tag": "s1", "text": TEXT}, headers=auth
     ).status_code == 401
-    assert client.get(LIST, headers=headers).json() == []
+    # the row stays listed, marked revoked: a developer whose .env stopped
+    # working needs to see *why*, not find the key silently gone
+    listed = client.get(LIST, headers=headers).json()
+    assert [k["status"] for k in listed] == ["revoked"]
+    assert listed[0]["revoked"] is True
 
 
 def test_revoking_twice_is_not_found(client: TestClient) -> None:
@@ -299,3 +303,108 @@ def test_usage_token_estimate_grows_with_disclosures(client: TestClient) -> None
 
 def test_usage_requires_a_credential(client: TestClient) -> None:
     assert client.get(USAGE).status_code == 401
+
+
+# --- key lifecycle: expiry, labels, status, last used -------------------------
+
+
+def test_generate_defaults_to_thirty_days(client: TestClient) -> None:
+    from datetime import datetime
+
+    body = client.post(GENERATE, headers=_jwt_headers(client)).json()
+    assert body["expires_at"] is not None
+    created = datetime.fromisoformat(body["created_at"])
+    expires = datetime.fromisoformat(body["expires_at"])
+    assert 29 <= (expires - created).days <= 30
+
+
+@pytest.mark.parametrize("choice,days", [("7d", 7), ("30d", 30), ("365d", 365)])
+def test_generate_honours_expiry_choice(client: TestClient, choice: str, days: int) -> None:
+    from datetime import datetime
+
+    body = client.post(GENERATE, json={"expires_in": choice},
+                       headers=_jwt_headers(client)).json()
+    created = datetime.fromisoformat(body["created_at"])
+    expires = datetime.fromisoformat(body["expires_at"])
+    assert (expires - created).days in (days - 1, days)
+
+
+def test_never_expires(client: TestClient) -> None:
+    body = client.post(GENERATE, json={"expires_in": "never"},
+                       headers=_jwt_headers(client)).json()
+    assert body["expires_at"] is None
+    assert client.get(LIST, headers=_jwt_headers(client)).json()[0]["status"] == "active"
+
+
+def test_unknown_expiry_is_rejected(client: TestClient) -> None:
+    resp = client.post(GENERATE, json={"expires_in": "forever-ish"},
+                       headers=_jwt_headers(client))
+    assert resp.status_code == 422
+
+
+def test_label_is_stored_and_listed(client: TestClient) -> None:
+    headers = _jwt_headers(client)
+    client.post(GENERATE, json={"expires_in": "30d", "label": "CI pipeline"},
+                headers=headers)
+    assert client.get(LIST, headers=headers).json()[0]["label"] == "CI pipeline"
+
+
+def test_expired_key_is_rejected_with_the_date(client: TestClient) -> None:
+    """A generic 401 sends people hunting for a typo; the date ends it."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.apikeys import api_keys as api_keys_table
+
+    headers = _jwt_headers(client)
+    _, key = _new_key(client, headers)
+    expired_on = datetime.now(timezone.utc) - timedelta(days=2)
+
+    db = _TestSession()
+    try:
+        db.execute(api_keys_table.update().values(expires_at=expired_on))
+        db.commit()
+    finally:
+        db.close()
+
+    resp = client.post(INGEST, json={"session_tag": "s1", "text": TEXT},
+                       headers={"X-API-Key": key})
+    assert resp.status_code == 401
+    detail = resp.json()["detail"]
+    assert "expired" in detail.lower()
+    assert expired_on.date().isoformat() in detail
+
+
+def test_status_reflects_the_clock(client: TestClient) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    from app.apikeys import api_keys as api_keys_table
+
+    headers = _jwt_headers(client)
+    key_id, _ = _new_key(client, headers)
+    now = datetime.now(timezone.utc)
+
+    for delta, expected in [
+        (timedelta(days=40), "active"),
+        (timedelta(days=3), "expiring_soon"),
+        (timedelta(days=-1), "expired"),
+    ]:
+        db = _TestSession()
+        try:
+            db.execute(api_keys_table.update()
+                       .where(api_keys_table.c.id == key_id)
+                       .values(expires_at=now + delta))
+            db.commit()
+        finally:
+            db.close()
+        listed = client.get(LIST, headers=headers).json()
+        assert listed[0]["status"] == expected, expected
+
+
+def test_last_used_at_is_recorded(client: TestClient) -> None:
+    headers = _jwt_headers(client)
+    _, key = _new_key(client, headers)
+    assert client.get(LIST, headers=headers).json()[0]["last_used_at"] is None
+
+    client.post(INGEST, json={"session_tag": "s1", "text": TEXT},
+                headers={"X-API-Key": key})
+    assert client.get(LIST, headers=headers).json()[0]["last_used_at"] is not None

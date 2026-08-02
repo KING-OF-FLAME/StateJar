@@ -453,3 +453,30 @@ def test_key_accepts_either_field_name(client: TestClient) -> None:
                        json={"provider": "gemini", "key": "gemini-secret-1234"},
                        headers=headers)
     assert resp.status_code == 201 and resp.json()["key_last4"] == "1234"
+
+
+def test_ollama_config_never_echoes_a_stored_secret(client: TestClient) -> None:
+    """The Ollama row is meant to hold a base URL, but a legacy row could hold
+    anything — the listing must not hand it back."""
+    headers = _auth_headers(client)
+    client.post("/api/v1/keys/provider",
+                json={"provider": "ollama", "api_key": fake_key("legacy-ollama-value")},
+                headers=headers)
+    listed = client.get("/api/v1/keys/provider", headers=headers).json()[0]
+    assert fake_key("legacy-ollama-value") not in str(listed)
+    assert listed["config"]["base_url"] == ""
+
+
+def test_ollama_config_round_trips_a_real_url(client: TestClient) -> None:
+    import json as _json
+
+    headers = _auth_headers(client)
+    client.post("/api/v1/keys/provider", headers=headers, json={
+        "provider": "ollama",
+        "api_key": _json.dumps({"base_url": "http://192.168.1.9:11434",
+                                "api_key": fake_key("ollama-cloud")}),
+    })
+    listed = client.get("/api/v1/keys/provider", headers=headers).json()[0]
+    assert listed["config"]["base_url"] == "http://192.168.1.9:11434"
+    assert listed["has_key"] is True
+    assert fake_key("ollama-cloud") not in str(listed)   # the key stays hidden
