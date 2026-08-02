@@ -300,8 +300,11 @@ npm install
 npm run dev                    # → http://localhost:5173
 ```
 
-Sign up → save an OpenRouter key in **API Keys** → open **Playground** → say
-*"My name is Ayaan, I prefer email, budget ₹2000"* → start a **new session** → ask *"Book my delivery"* — watch it retrieve only the 3 fields it needs.
+Sign up → save a key for any provider (OpenRouter, OpenAI, Anthropic, Gemini,
+or point at a local Ollama) in **API Keys** → open **Playground** → say
+*"Stack: React + Tailwind. Dark theme, brand color #E07856."* → start a
+**new session** → ask *"Now add a pricing section."* — watch it retrieve only
+the fields it needs.
 
 </details>
 
@@ -311,10 +314,15 @@ Sign up → save an OpenRouter key in **API Keys** → open **Playground** → s
 
 ## 🧭 Roadmap (Round 2)
 
-- **GLiNER2 as primary extractor** (rule-based becomes fallback) for open-domain extraction
-- **Benchmark suite** — token savings & consistency vs. transcript-replay and vector-memory baselines
-- **Multi-provider gateway** — native OpenAI / Anthropic / Gemini / Ollama alongside OpenRouter
-- Audit-log UI, org/team workspaces, handle export API
+- ✅ **Multi-provider gateway** — *shipped.* Native OpenAI, Anthropic, Gemini and
+  Ollama alongside OpenRouter. Save a key per provider on **API Keys**; each
+  provider's live catalog is fetched with your own key and grouped in the model
+  picker, and any custom model id passes through unwhitelisted.
+- ✅ **Benchmark suite** — *shipped.* See [Benchmark](#benchmark).
+- ✅ **Audit-log UI** — *shipped.* Provenance timeline with per-entry replay.
+- **GLiNER as primary extractor** (rule-based becomes fallback) for open-domain
+  extraction — env-gated today via `EXTRACTOR_MODE`
+- Org/team workspaces, handle export API
 
 ## 📄 License
 

@@ -36,6 +36,13 @@ class Settings(BaseSettings):
     # query the keyword intent map does not recognise falls back to embedding
     # similarity. Read path only — it cannot affect a handle.
     retriever_semantic: bool = False
+    # --- provider endpoints ---
+    # Overridable so a deployment can route through a proxy or gateway, and so
+    # tests can point a provider at a local stub instead of the real host.
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openai_base_url: str = "https://api.openai.com/v1"
+    anthropic_base_url: str = "https://api.anthropic.com/v1"
+    gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
     # --- local (Ollama) models ---
     ollama_base_url: str = "http://localhost:11434"
     # Off by default so production statejar.com never advertises models that

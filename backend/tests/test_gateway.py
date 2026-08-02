@@ -7,7 +7,7 @@ import pytest
 import respx
 from fastapi.testclient import TestClient
 from httpx import Response
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -148,11 +148,13 @@ def test_build_system_context() -> None:
     assert '"contact_mode": "email"' in ctx
 
 
-def test_placeholder_providers_raise() -> None:
-    # ollama is implemented now — see tests/test_ollama.py
-    for name in ("openai", "anthropic", "gemini"):
-        with pytest.raises(NotImplementedError):
-            get_provider(name).chat("k", "m", "s", "u")
+def test_every_provider_implements_the_shared_interface() -> None:
+    """All five are real now — see tests/test_providers.py for their wire calls."""
+    for name in ("openrouter", "openai", "anthropic", "gemini", "ollama"):
+        provider = get_provider(name)
+        assert callable(provider.chat)
+        assert callable(provider.list_models)
+        assert provider.label
 
 
 def test_demo_provider_needs_no_key_and_no_network() -> None:
@@ -161,23 +163,22 @@ def test_demo_provider_needs_no_key_and_no_network() -> None:
         # no provider key saved for this user — demo must still answer
         result = chat(
             db, user_id=42, model="scripted-demo",
-            system_context="s", user_message="My name is Ayaan, budget ₹2000",
+            system_context="s", user_message="Stack: React + Tailwind, dark theme",
             provider="demo",
         )
     finally:
         db.close()
-    assert "Ayaan" in result["content"]
+    assert "React + Tailwind" in result["content"]
     assert result["model"] == "scripted-demo"
 
 
 def test_demo_provider_scripted_steps() -> None:
+    """Canned replies track the playground's web-dev scenario."""
     demo = get_provider("demo")
-    booking = demo.chat("", "m", "s", "Book my delivery with my usual preferences")
-    assert "delivery time" in booking["content"]
-    update = demo.chat("", "m", "s", "Budget is now ₹2500")
-    assert "2500" in update["content"]
-    fallback = demo.chat("", "m", "s", "hello there")
-    assert "scripted demo" in fallback["content"]
+    assert "React + Tailwind" in demo.chat("", "m", "s", "Stack: React + Tailwind")["content"]
+    assert "Pricing section" in demo.chat("", "m", "s", "Now add a pricing section")["content"]
+    assert "conflict" in demo.chat("", "m", "s", "Use shadcn/ui")["content"]
+    assert "scripted demo" in demo.chat("", "m", "s", "hello there")["content"]
 
 
 @respx.mock
@@ -192,9 +193,9 @@ def test_chat_calls_openrouter_with_user_key(client: TestClient) -> None:
         return_value=Response(
             200,
             json={
-                "model": "openai/gpt-4o-mini",
+                "model": "meta-llama/llama-3.3-70b-instruct:free",
                 "choices": [{"message": {"role": "assistant", "content": "Hello Ayaan!"}}],
-                "usage": {"total_tokens": 42},
+                "usage": {"prompt_tokens": 30, "completion_tokens": 12, "total_tokens": 42},
             },
         )
     )
@@ -203,7 +204,8 @@ def test_chat_calls_openrouter_with_user_key(client: TestClient) -> None:
         result = chat(
             db,
             user_id=1,
-            model="openai/gpt-4o-mini",
+            # a vendor prefix that is not a provider name stays on OpenRouter
+            model="meta-llama/llama-3.3-70b-instruct:free",
             system_context=build_system_context("shm_" + "a" * 40, {"facts": {"name": "Ayaan"}}),
             user_message="Greet me",
         )
@@ -247,7 +249,7 @@ from app.llm import gateway as gw  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def _reset_models_cache() -> None:
-    gw._models_cache.update(at=0.0, free=None)
+    gw.clear_models_cache()
 
 
 _CATALOG = {
@@ -287,56 +289,162 @@ def test_models_requires_auth(client: TestClient) -> None:
     assert client.get("/api/v1/models").status_code == 401
 
 
-def test_models_fallback_without_key(client: TestClient) -> None:
-    headers = _auth_headers(client)
-    resp = client.get("/api/v1/models", headers=headers)
+def test_models_empty_without_any_key(client: TestClient) -> None:
+    """No keys, no groups — the picker then prompts for one."""
+    resp = client.get("/api/v1/models", headers=_auth_headers(client))
     assert resp.status_code == 200
     body = resp.json()
+    assert body["groups"] == []
     assert body["source"] == "fallback"
-    assert body["free"] == gw.FALLBACK_FREE_MODELS
-    assert body["paid"] == gw.PAID_MODELS
 
 
 @respx.mock
-def test_models_live_filters_free_and_sorts_by_context(client: TestClient) -> None:
-    respx.get(gw.OPENROUTER_MODELS_URL).mock(return_value=Response(200, json=_CATALOG))
+def test_models_groups_openrouter_free_and_paid(client: TestClient) -> None:
     headers = _auth_headers(client)
-    client.post(
-        "/api/v1/keys/provider",
-        json={"provider": "openrouter", "api_key": "sk-or-v1-testkey1234"},
-        headers=headers,
-    )
-    resp = client.get("/api/v1/models", headers=headers)
-    assert resp.status_code == 200
-    body = resp.json()
+    client.post("/api/v1/keys/provider",
+                json={"provider": "openrouter", "api_key": "sk-or-v1-testkey1234"},
+                headers=headers)
+    respx.get("https://openrouter.ai/api/v1/models").mock(
+        return_value=Response(200, json=_CATALOG))
+
+    body = client.get("/api/v1/models", headers=headers).json()
     assert body["source"] == "live"
-    assert [m["id"] for m in body["free"]] == ["big/free-model:free", "small/free-model:free"]
-    assert body["paid"] == gw.PAID_MODELS
+    assert [g["provider"] for g in body["groups"]] == ["openrouter"]
+    group = body["groups"][0]
+    assert group["label"] == "OpenRouter"
+    # free, biggest context first; the audio-only freebie is excluded
+    assert [m["id"] for m in group["free"]] == ["big/free-model:free", "small/free-model:free"]
+    assert all(m["is_free"] for m in group["free"])
+    assert group["free"][0]["context_length"] == 200000
+    assert group["paid"] and not any(m["is_free"] for m in group["paid"])
 
 
 @respx.mock
-def test_models_cached_for_an_hour(client: TestClient) -> None:
-    route = respx.get(gw.OPENROUTER_MODELS_URL).mock(return_value=Response(200, json=_CATALOG))
+def test_models_cached_per_user_for_an_hour(client: TestClient) -> None:
     headers = _auth_headers(client)
-    client.post(
-        "/api/v1/keys/provider",
-        json={"provider": "openrouter", "api_key": "sk-or-v1-testkey1234"},
-        headers=headers,
-    )
+    client.post("/api/v1/keys/provider",
+                json={"provider": "openrouter", "api_key": "sk-or-v1-testkey1234"},
+                headers=headers)
+    route = respx.get("https://openrouter.ai/api/v1/models").mock(
+        return_value=Response(200, json=_CATALOG))
+
     client.get("/api/v1/models", headers=headers)
     client.get("/api/v1/models", headers=headers)
     assert route.call_count == 1
 
 
 @respx.mock
-def test_models_fetch_failure_falls_back(client: TestClient) -> None:
-    respx.get(gw.OPENROUTER_MODELS_URL).mock(return_value=Response(500))
+def test_saving_a_key_invalidates_the_cache(client: TestClient) -> None:
+    """A rotated key must be used immediately, not in an hour."""
     headers = _auth_headers(client)
-    client.post(
-        "/api/v1/keys/provider",
-        json={"provider": "openrouter", "api_key": "sk-or-v1-testkey1234"},
-        headers=headers,
-    )
-    resp = client.get("/api/v1/models", headers=headers)
-    assert resp.status_code == 200
-    assert resp.json()["source"] == "fallback"
+    client.post("/api/v1/keys/provider",
+                json={"provider": "openrouter", "api_key": "sk-or-v1-testkey1234"},
+                headers=headers)
+    route = respx.get("https://openrouter.ai/api/v1/models").mock(
+        return_value=Response(200, json=_CATALOG))
+
+    client.get("/api/v1/models", headers=headers)
+    client.post("/api/v1/keys/provider",
+                json={"provider": "openrouter", "api_key": "sk-or-v1-rotated9999"},
+                headers=headers)
+    client.get("/api/v1/models", headers=headers)
+    assert route.call_count == 2
+    assert route.calls.last.request.headers["authorization"] == "Bearer sk-or-v1-rotated9999"
+
+
+@respx.mock
+def test_one_failing_provider_does_not_break_the_others(client: TestClient) -> None:
+    """The whole point of grouping: a dead provider costs only its own group."""
+    headers = _auth_headers(client)
+    for provider, key in (("openrouter", "sk-or-v1-testkey1234"), ("openai", "sk-openai-testkey")):
+        client.post("/api/v1/keys/provider",
+                    json={"provider": provider, "api_key": key}, headers=headers)
+
+    respx.get("https://openrouter.ai/api/v1/models").mock(
+        return_value=Response(200, json=_CATALOG))
+    respx.get("https://api.openai.com/v1/models").mock(
+        return_value=Response(500, json={"error": {"message": "upstream on fire"}}))
+
+    body = client.get("/api/v1/models", headers=headers).json()
+    groups = {g["provider"]: g for g in body["groups"]}
+    assert set(groups) == {"openrouter", "openai"}
+    assert groups["openrouter"]["free"]                 # unaffected
+    assert groups["openai"]["free"] == [] and groups["openai"]["paid"] == []
+    assert "upstream on fire" in groups["openai"]["error"]
+    assert body["source"] == "live"                     # one good provider is enough
+
+
+@respx.mock
+def test_catalog_error_never_contains_the_key(client: TestClient) -> None:
+    headers = _auth_headers(client)
+    client.post("/api/v1/keys/provider",
+                json={"provider": "openai", "api_key": "sk-openai-supersecret"},
+                headers=headers)
+    respx.get("https://api.openai.com/v1/models").mock(
+        return_value=Response(401, json={"error": {"message": "bad key sk-openai-supersecret"}}))
+
+    body = client.get("/api/v1/models", headers=headers).json()
+    error = body["groups"][0]["error"]
+    assert "sk-openai-supersecret" not in error
+    assert "***" in error and "rejected the API key" in error
+
+
+def test_delete_provider_key(client: TestClient) -> None:
+    headers = _auth_headers(client)
+    client.post("/api/v1/keys/provider",
+                json={"provider": "openai", "api_key": "sk-openai-testkey"}, headers=headers)
+    listed = client.get("/api/v1/keys/provider", headers=headers).json()
+    assert [k["provider"] for k in listed] == ["openai"]
+
+    resp = client.request("DELETE", "/api/v1/keys/provider/openai", headers=headers)
+    assert resp.status_code == 200 and resp.json()["removed"] is True
+    assert client.get("/api/v1/keys/provider", headers=headers).json() == []
+    assert client.request(
+        "DELETE", "/api/v1/keys/provider/openai", headers=headers).status_code == 404
+
+
+def test_saving_a_key_twice_replaces_it(client: TestClient) -> None:
+    """A rotated key must not leave the old one usable."""
+    headers = _auth_headers(client)
+    for key in ("sk-openai-firstkey1", "sk-openai-secondkey2"):
+        client.post("/api/v1/keys/provider",
+                    json={"provider": "openai", "api_key": key}, headers=headers)
+    listed = client.get("/api/v1/keys/provider", headers=headers).json()
+    assert len(listed) == 1 and listed[0]["key_last4"] == "key2"
+
+    db = _TestSession()
+    try:
+        assert gw._get_user_key(db, 1, "openai") == "sk-openai-secondkey2"
+        rows = db.execute(
+            select(gw.provider_keys).where(gw.provider_keys.c.provider == "openai")
+        ).mappings().all()
+        assert len(rows) == 1  # superseded row deleted, not shadowed
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("provider", ["openrouter", "openai", "anthropic", "gemini", "ollama"])
+def test_key_roundtrip_per_provider(client: TestClient, provider: str) -> None:
+    headers = _auth_headers(client)
+    secret = f"secret-for-{provider}-1234"
+    resp = client.post("/api/v1/keys/provider",
+                       json={"provider": provider, "api_key": secret}, headers=headers)
+    assert resp.status_code == 201
+    assert secret not in resp.text                        # never echoed back
+    assert resp.json()["key_last4"] == secret[-4:]
+    assert secret not in client.get("/api/v1/keys/provider", headers=headers).text
+
+    db = _TestSession()
+    try:
+        assert gw._get_user_key(db, 1, provider) == secret   # decrypts intact
+    finally:
+        db.close()
+
+
+def test_key_accepts_either_field_name(client: TestClient) -> None:
+    """`key` is the documented name; `api_key` is what the console has always sent."""
+    headers = _auth_headers(client)
+    resp = client.post("/api/v1/keys/provider",
+                       json={"provider": "gemini", "key": "gemini-secret-1234"},
+                       headers=headers)
+    assert resp.status_code == 201 and resp.json()["key_last4"] == "1234"

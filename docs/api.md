@@ -111,7 +111,7 @@ what was shared.
 
 `POST /api/v1/chat`
 
-Requires a provider key saved in the console (**API Keys → OpenRouter**).
+Requires a provider key saved in the console (**API Keys → Providers**).
 StateJar retrieves the minimal subset, builds the system context, calls the
 model, and writes the audit row in one round trip.
 
@@ -137,10 +137,60 @@ curl -s -X POST "$STATEJAR_URL/api/v1/chat" \
 
 `subset_keys` tells you precisely which fields reached the model.
 
+## Models and providers
+
+### Choosing a model
+
+`model` is a `provider/model` id. A leading `openai/`, `anthropic/`, `gemini/`
+or `ollama/` routes the call to that provider and is stripped before the id is
+sent upstream; anything else is an OpenRouter id and travels unchanged:
+
+| `model` you send | Goes to | Sent upstream as |
+|---|---|---|
+| `openai/gpt-4o-mini` | OpenAI | `gpt-4o-mini` |
+| `anthropic/claude-sonnet-4-6` | Anthropic | `claude-sonnet-4-6` |
+| `gemini/gemini-2.5-flash` | Gemini | `gemini-2.5-flash` |
+| `ollama/llama3.2` | your local daemon (no key) | `llama3.2` |
+| `meta-llama/llama-3.3-70b-instruct:free` | OpenRouter | unchanged |
+| `openrouter/anthropic/claude-sonnet-4.6` | OpenRouter | `anthropic/claude-sonnet-4.6` |
+
+The last row is the escape hatch: OpenRouter's own ids are vendor-prefixed, so
+`openrouter/` states explicitly that you want it billed through OpenRouter
+rather than sent to Anthropic directly. **Model ids are never whitelisted** —
+anything you type is forwarded, and if the provider rejects it you get its own
+message back.
+
+`GET /api/v1/models` returns your configured providers, grouped:
+
+```json
+{
+  "groups": [
+    {
+      "provider": "openrouter",
+      "label": "OpenRouter",
+      "free": [{"id": "…:free", "name": "…", "context_length": 128000, "is_free": true}],
+      "paid": [{"id": "openrouter/anthropic/claude-sonnet-4.6", "name": "…", "is_free": false}]
+    },
+    {"provider": "openai", "label": "OpenAI", "free": [], "paid": [{"id": "openai/gpt-4o-mini"}]}
+  ],
+  "source": "live"
+}
+```
+
+Only providers you have saved a key for appear (plus Ollama when the server
+enables it). A provider whose catalog call fails comes back with an `error`
+field and empty lists rather than failing the whole response, and each
+catalog is cached for an hour per user.
+
 ## Other endpoints
 
 | Method | Path | Purpose |
 |--------|------|---------|
+| `GET` | `/api/v1/models` | Your providers' live catalogs, grouped |
+| `POST` | `/api/v1/keys/provider` | Save a key: `{"provider": "openai", "key": "sk-…"}` |
+| `GET` | `/api/v1/keys/provider` | Saved providers — last 4 characters only |
+| `DELETE` | `/api/v1/keys/provider/{provider}` | Forget a saved key |
+| `POST` | `/api/v1/keys/provider/{provider}/test` | Check a credential without chatting |
 | `GET` | `/api/v1/usage` | Requests today, total states, audit rows, estimated tokens saved |
 | `GET` | `/api/v1/memory/versions?session_tag=user-42` | The handle chain for a session, oldest first |
 | `GET` | `/api/v1/memory/state/{handle}` | Any state you own, by handle |

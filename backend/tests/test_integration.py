@@ -218,7 +218,9 @@ def test_chat_upstream_5xx_is_502(client: TestClient, headers: dict[str, str]) -
         "/api/v1/chat", json={"session_tag": "s3", "query": "Book it"}, headers=headers
     )
     assert r.status_code == 502
-    assert r.json()["detail"] == "Provider error: upstream exploded"
+    # the provider's own words, prefixed with who said them
+    detail = r.json()["detail"]
+    assert "upstream exploded" in detail and "OpenRouter" in detail
 
 
 @respx.mock
@@ -242,7 +244,8 @@ def test_chat_upstream_timeout_is_502(client: TestClient, headers: dict[str, str
         "/api/v1/chat", json={"session_tag": "s4", "query": "Book it"}, headers=headers
     )
     assert r.status_code == 502
-    assert r.json()["detail"].startswith("Provider error:")
+    detail = r.json()["detail"]
+    assert "OpenRouter" in detail and "timed out" in detail
 
 
 def test_demo_chat_needs_no_key_and_writes_audit(
@@ -257,7 +260,7 @@ def test_demo_chat_needs_no_key_and_writes_audit(
         "/api/v1/chat",
         json={
             "session_tag": "demo-1",
-            "query": "Book my delivery with my usual preferences",
+            "query": "Now add a pricing section.",
             "provider": "demo",
             "model": "scripted-demo",
         },
@@ -265,7 +268,7 @@ def test_demo_chat_needs_no_key_and_writes_audit(
     )
     assert r.status_code == 200
     body = r.json()
-    assert "delivery time" in body["response"]
+    assert "Pricing section" in body["response"]
     trail = client.get(
         "/api/v1/audit?session_tag=demo-1", headers=headers
     ).json()["entries"]

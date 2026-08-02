@@ -193,8 +193,8 @@ def test_tagged_model_names_survive_prefix_strip() -> None:
 def test_non_ollama_models_keep_openrouter_behaviour() -> None:
     db = _TestSession()
     try:
-        with pytest.raises(LookupError, match="No openrouter API key saved"):
-            gateway.chat(db, user_id=1, model="openai/gpt-4o-mini",
+        with pytest.raises(LookupError, match="OpenRouter API key"):
+            gateway.chat(db, user_id=1, model="meta-llama/llama-3.3-70b-instruct:free",
                          system_context="s", user_message="u")
     finally:
         db.close()
@@ -236,19 +236,28 @@ def test_chat_route_surfaces_ollama_down_message(client: TestClient) -> None:
 
 
 def test_models_hides_local_group_by_default(client: TestClient) -> None:
-    gateway._models_cache.update(at=0.0, free=None)
+    gateway.clear_models_cache()
     body = client.get("/api/v1/models", headers=_auth_headers(client)).json()
-    assert "local" not in body
+    assert [g["provider"] for g in body["groups"]] == []
 
 
-def test_models_shows_local_group_when_enabled(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+@respx.mock
+def test_models_shows_local_group_when_enabled(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ollama is the one provider that appears without a saved key."""
     monkeypatch.setenv("SHOW_OLLAMA", "true")
     get_settings.cache_clear()
-    gateway._models_cache.update(at=0.0, free=None)
+    gateway.clear_models_cache()
+    respx.get("http://localhost:11434/api/tags").mock(return_value=Response(
+        200, json={"models": [{"name": "llama3.2"}, {"name": "qwen2.5:3b"}]}))
 
     body = client.get("/api/v1/models", headers=_auth_headers(client)).json()
-    assert [m["id"] for m in body["local"]] == ["ollama/llama3.2", "ollama/qwen2.5:3b"]
-    assert body["free"] and body["paid"]  # other groups unaffected
+    local = next(g for g in body["groups"] if g["provider"] == "ollama")
+    # namespaced so /chat routes them back to the daemon, and free because
+    # local inference costs nothing
+    assert [m["id"] for m in local["free"]] == ["ollama/llama3.2", "ollama/qwen2.5:3b"]
+    assert local["paid"] == []
 
 
 @respx.mock
@@ -275,5 +284,11 @@ def test_ollama_http_error_names_ollama_not_openrouter(client: TestClient) -> No
 def test_resolve_provider() -> None:
     assert gateway.resolve_provider("ollama/llama3.2") == "ollama"
     assert gateway.resolve_provider("ollama/qwen2.5:3b", "openrouter") == "ollama"
-    assert gateway.resolve_provider("openai/gpt-4o-mini") == "openrouter"
+    # a provider-named prefix now routes to that provider...
+    assert gateway.resolve_provider("openai/gpt-4o-mini") == "openai"
+    assert gateway.resolve_provider("anthropic/claude-sonnet-4-6") == "anthropic"
+    assert gateway.resolve_provider("gemini/gemini-2.5-flash") == "gemini"
+    # ...while a plain vendor prefix stays with OpenRouter
+    assert gateway.resolve_provider("meta-llama/llama-3.3-70b-instruct:free") == "openrouter"
+    assert gateway.resolve_provider("some-custom-id") == "openrouter"
     assert gateway.resolve_provider("scripted-demo", "demo") == "demo"

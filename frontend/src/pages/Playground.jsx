@@ -1,28 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import AuditTimeline from '../components/AuditTimeline.jsx'
 import Pipeline, { canonicalPreview, countFields, usePipeline } from '../components/Pipeline.jsx'
-
-/* Fallback catalog shown until GET /models answers (the backend serves the
-   live free list from OpenRouter; stale hardcoded IDs 404 with
-   "No endpoints found"). */
-const FALLBACK_CATALOG = {
-  free: [
-    { id: 'meta-llama/llama-3.3-70b-instruct:free', name: 'Llama 3.3 70B Instruct (free)' },
-    { id: 'google/gemma-3-27b-it:free', name: 'Gemma 3 27B (free)' },
-    { id: 'deepseek/deepseek-chat-v3.1:free', name: 'DeepSeek V3.1 (free)' },
-  ],
-  paid: [
-    { id: 'openai/gpt-4o-mini', name: 'GPT-4o mini' },
-    { id: 'anthropic/claude-sonnet-4.6', name: 'Claude Sonnet 4.6' },
-    { id: 'anthropic/claude-haiku-4.5', name: 'Claude Haiku 4.5' },
-    { id: 'google/gemini-2.5-flash', name: 'Gemini 2.5 Flash' },
-  ],
-  // Local Ollama models: only ever populated from the backend, which serves
-  // them behind SHOW_OLLAMA so production never advertises a laptop daemon.
-  local: [],
-}
 
 const CUSTOM_MODEL = '__custom__'
 const OLLAMA_PREFIX = 'ollama/'
@@ -207,8 +187,13 @@ function StateTree({ state, changed }) {
 }
 
 /* ---------- model picker ---------- */
+/* Grouped by provider: only providers the user has configured appear, so the
+   list is a picture of their own account rather than a menu of everything
+   that exists. Custom lets any id reach any configured provider — the
+   backend has no whitelist, so a brand-new model works the day it ships. */
 function ModelPicker({
-  catalog, choice, customModel, onChoice, onCustomChange, disabled, disabledHint, openSignal,
+  groups, choice, customModel, customProvider, onChoice, onCustomChange,
+  onCustomProvider, disabled, disabledHint, openSignal,
 }) {
   const [open, setOpen] = useState(false)
   const wrapRef = useRef(null)
@@ -232,9 +217,16 @@ function ModelPicker({
 
   const isCustom = choice === CUSTOM_MODEL
   const pick = (value) => { onChoice(value); setOpen(false) }
+  const configured = groups.length > 0
+  const allModels = groups.flatMap((g) => [...g.free, ...g.paid])
+  const selected = allModels.find((m) => m.id === choice)
 
   return (
-    <div className={`mp${disabled ? ' mp-disabled' : ''}`} ref={wrapRef} title={disabled ? disabledHint : undefined}>
+    <div
+      className={`mp${disabled ? ' mp-disabled' : ''}`}
+      ref={wrapRef}
+      title={disabled ? disabledHint : undefined}
+    >
       <button
         type="button" className="mp-btn" disabled={disabled}
         title={disabled ? disabledHint : undefined}
@@ -242,54 +234,60 @@ function ModelPicker({
         onClick={() => setOpen((v) => !v)}
       >
         <span className="mp-label mono">
-          {isCustom ? (customModel.trim() || 'Custom model…') : choice}
+          {isCustom
+            ? (customModel.trim() || 'Custom model…')
+            : (choice || 'No model')}
         </span>
-        {catalog.free.some((m) => m.id === choice) && <span className="badge-free">FREE</span>}
+        {selected?.is_free && <span className="badge-free">FREE</span>}
         {choice.startsWith(OLLAMA_PREFIX) && <span className="badge-offline">OFFLINE</span>}
         <span className="mp-caret" aria-hidden="true">▾</span>
       </button>
 
       {open && (
         <div className="mp-pop" role="listbox" aria-label="Model">
-          <p className="mp-group">Free</p>
-          {catalog.free.map((m) => (
-            <button
-              type="button" key={m.id} role="option" aria-selected={choice === m.id}
-              className={`mp-item${choice === m.id ? ' active' : ''}`}
-              onClick={() => pick(m.id)}
-              title={m.name}
-            >
-              <span className="mp-name mono">{m.id}</span>
-              <span className="badge-free">FREE</span>
-            </button>
-          ))}
-          <p className="mp-group">Paid <span className="mp-note">requires credits</span></p>
-          {catalog.paid.map((m) => (
-            <button
-              type="button" key={m.id} role="option" aria-selected={choice === m.id}
-              className={`mp-item${choice === m.id ? ' active' : ''}`}
-              onClick={() => pick(m.id)}
-              title={m.name}
-            >
-              <span className="mp-name mono">{m.id}</span>
-            </button>
-          ))}
-          {catalog.local?.length > 0 && (
-            <>
-              <p className="mp-group">Local (offline) <span className="mp-note">runs on this machine</span></p>
-              {catalog.local.map((m) => (
+          {!configured && (
+            <Link className="mp-item mp-empty" to="/api-keys" onClick={() => setOpen(false)}>
+              Add a provider key to chat →
+            </Link>
+          )}
+
+          {groups.map((group) => (
+            <div key={group.provider} className="mp-provider">
+              <p className="mp-group">
+                {group.label}
+                <span className="mp-note">
+                  {group.error
+                    ? 'unavailable'
+                    : `${group.free.length + group.paid.length} models`}
+                </span>
+              </p>
+              {group.error && <p className="mp-error">{group.error}</p>}
+
+              {group.free.length > 0 && <p className="mp-sub">Free</p>}
+              {group.free.map((m) => (
                 <button
                   type="button" key={m.id} role="option" aria-selected={choice === m.id}
                   className={`mp-item${choice === m.id ? ' active' : ''}`}
-                  onClick={() => pick(m.id)}
-                  title={m.name}
+                  onClick={() => pick(m.id)} title={m.name}
                 >
                   <span className="mp-name mono">{m.id}</span>
-                  <span className="badge-offline">OFFLINE</span>
+                  <span className="badge-free">FREE</span>
                 </button>
               ))}
-            </>
-          )}
+
+              {group.paid.length > 0 && <p className="mp-sub">Paid</p>}
+              {group.paid.map((m) => (
+                <button
+                  type="button" key={m.id} role="option" aria-selected={choice === m.id}
+                  className={`mp-item${choice === m.id ? ' active' : ''}`}
+                  onClick={() => pick(m.id)} title={m.name}
+                >
+                  <span className="mp-name mono">{m.id}</span>
+                </button>
+              ))}
+            </div>
+          ))}
+
           <button
             type="button" role="option" aria-selected={isCustom}
             className={`mp-item mp-custom${isCustom ? ' active' : ''}`}
@@ -301,33 +299,47 @@ function ModelPicker({
       )}
 
       {isCustom && (
-        <input
-          className="mp-input mono"
-          value={customModel}
-          onChange={(e) => onCustomChange(e.target.value)}
-          placeholder="qwen/qwen-2.5-72b-instruct"
-          aria-label="Custom OpenRouter model ID"
-          spellCheck={false}
-          disabled={disabled}
-        />
+        <div className="mp-custom-row">
+          <select
+            className="mp-custom-provider"
+            value={customProvider}
+            onChange={(e) => onCustomProvider(e.target.value)}
+            aria-label="Provider for the custom model"
+            disabled={disabled}
+          >
+            {(configured ? groups : [{ provider: 'openrouter', label: 'OpenRouter' }])
+              .map((g) => (
+                <option key={g.provider} value={g.provider}>{g.label}</option>
+              ))}
+          </select>
+          <input
+            className="mp-input mono"
+            value={customModel}
+            onChange={(e) => onCustomChange(e.target.value)}
+            placeholder="any model id, sent through unchanged"
+            disabled={disabled}
+            aria-label="Custom model id"
+          />
+        </div>
       )}
     </div>
   )
 }
 
-/* ---------- playground ---------- */
 export default function Playground() {
   const [sessions, setSessions] = useState(() =>
     JSON.parse(localStorage.getItem('statejar_sessions') || '["session-1"]'))
   const [session, setSession] = useState(sessions[0])
-  const [catalog, setCatalog] = useState(FALLBACK_CATALOG)
+  const [groups, setGroups] = useState([])   // [{provider, label, free, paid, error?}]
   const [modelChoice, setModelChoice] = useState(
-    () => localStorage.getItem('statejar_model') || FALLBACK_CATALOG.free[0].id)
+    () => localStorage.getItem('statejar_model') || '')
   const [modelGone, setModelGone] = useState(false)   // selected model vanished from OpenRouter
   const [ollamaDown, setOllamaDown] = useState(false) // local daemon unreachable
   const [pickerSignal, setPickerSignal] = useState(0) // bump to force the picker open
   const [customModel, setCustomModel] = useState(
     () => localStorage.getItem('statejar_custom_model') || '')
+  const [customProvider, setCustomProvider] = useState(
+    () => localStorage.getItem('statejar_custom_provider') || 'openrouter')
   const [auditScope, setAuditScope] = useState('session')
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
@@ -384,22 +396,26 @@ export default function Playground() {
     localStorage.setItem('statejar_model', value)
   }
 
-  // Live model catalog: default to the first free model returned; keep the
-  // user's saved choice only if it still exists (custom is always kept).
+  /* Live catalog, one group per configured provider. A saved choice is kept
+     only while the catalog still lists it — a model pulled by its provider,
+     or a key that was removed, falls back to the first available one and
+     raises the "no longer available" hint rather than failing at send time. */
   useEffect(() => {
     api('/models')
       .then((cat) => {
-        if (!cat.free?.length) return
-        setCatalog({ free: cat.free, paid: cat.paid, local: cat.local || [] })
+        const live = cat.groups || []
+        setGroups(live)
+        const all = live.flatMap((g) => [...g.free, ...g.paid])
         setModelChoice((current) => {
-          const known = [...cat.free, ...cat.paid, ...(cat.local || [])]
-            .some((m) => m.id === current)
-          if (current === CUSTOM_MODEL || known) return current
-          localStorage.setItem('statejar_model', cat.free[0].id)
-          return cat.free[0].id
+          if (current === CUSTOM_MODEL) return current
+          if (all.some((m) => m.id === current)) return current
+          if (current && all.length) setModelGone(true)
+          const next = all.length ? all[0].id : ''
+          localStorage.setItem('statejar_model', next)
+          return next
         })
       })
-      .catch(() => {}) // keep the fallback catalog
+      .catch(() => setGroups([]))
   }, [])
 
   const editCustomModel = (value) => {
@@ -407,9 +423,24 @@ export default function Playground() {
     localStorage.setItem('statejar_custom_model', value)
   }
 
-  // model string sent to the gateway; blank custom falls back to the free default
-  const effectiveModel =
-    modelChoice === CUSTOM_MODEL ? (customModel.trim() || catalog.free[0].id) : modelChoice
+  const editCustomProvider = (value) => {
+    setCustomProvider(value)
+    localStorage.setItem('statejar_custom_provider', value)
+  }
+
+  const allModels = groups.flatMap((g) => [...g.free, ...g.paid])
+  const hasProviders = groups.length > 0
+
+  /* The id sent to /chat. A custom id is namespaced with the provider the
+     user picked so the gateway routes it there; OpenRouter ids stay in their
+     native vendor/model form. */
+  const effectiveModel = (() => {
+    if (modelChoice !== CUSTOM_MODEL) return modelChoice
+    const typed = customModel.trim()
+    if (!typed) return allModels[0]?.id || ''
+    if (customProvider === 'openrouter') return typed
+    return typed.startsWith(`${customProvider}/`) ? typed : `${customProvider}/${typed}`
+  })()
 
   /* Turn a provider failure into an actionable hint. The backend's exact
      message is always shown in the error bubble; these chips add the fix. */
@@ -999,11 +1030,13 @@ export default function Playground() {
             + New session
           </button>
           <ModelPicker
-            catalog={catalog}
+            groups={groups}
             choice={modelChoice}
             customModel={customModel}
+            customProvider={customProvider}
             onChoice={pickModel}
             onCustomChange={editCustomModel}
+            onCustomProvider={editCustomProvider}
             disabled={demoRunning}
             disabledHint="Not used in demo mode"
             openSignal={pickerSignal}

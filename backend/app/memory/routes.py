@@ -14,7 +14,7 @@ from app.apikeys import get_api_caller
 from app.auth.routes import UserOut
 from app.database import get_db
 from app.llm import gateway
-from app.llm.providers import ProviderUnavailableError
+from app.llm.providers import ProviderError
 from app.memory.audit import AuditLogger
 from app.memory.canonicalizer import NORM_VERSION, SCHEMA_VERSION, canonicalize
 from app.memory.extractor import extract_state_with_source
@@ -53,7 +53,10 @@ class QueryRequest(BaseModel):
 
 
 class ChatRequest(QueryRequest):
-    model: str = Field(default="openai/gpt-4o-mini", max_length=100)
+    # Explicitly namespaced: a bare "openai/gpt-4o-mini" is a valid OpenRouter
+    # id *and* an OpenAI routing prefix, so the default spells out which one it
+    # means rather than depending on precedence.
+    model: str = Field(default="openrouter/openai/gpt-4o-mini", max_length=100)
     provider: str = Field(default="openrouter", max_length=50)
 
 
@@ -161,8 +164,10 @@ def chat(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
     except NotImplementedError as exc:
         raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, str(exc))
-    except ProviderUnavailableError as exc:
-        # already written for the end user (e.g. "is `ollama serve` running?")
+    except ProviderError as exc:
+        # already normalised and written for the end user by the provider
+        # adapter (bad key, rate limit, unknown model, daemon down) — and the
+        # credential is scrubbed there, so it is safe to surface verbatim
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc))
     except httpx.TimeoutException:
         raise HTTPException(

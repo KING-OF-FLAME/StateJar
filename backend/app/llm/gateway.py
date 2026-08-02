@@ -38,7 +38,12 @@ from sqlalchemy.orm import Session
 from app.auth.routes import UserOut, get_current_user
 from app.config import get_settings
 from app.database import get_db
-from app.llm.providers import get_provider
+from app.llm.providers import (
+    KEYED_PROVIDERS,
+    KEYLESS_PROVIDERS,
+    get_provider,
+    provider_label,
+)
 from app.timeutil import iso_utc
 
 llm_metadata = MetaData()
@@ -95,6 +100,32 @@ def _get_user_key(db: Session, user_id: int, provider: str) -> str | None:
 
 OLLAMA_PREFIX = "ollama/"
 
+# A leading "<provider>/" routes the call, and is stripped before the id is
+# sent upstream. Anything else — "meta-llama/…", "google/…", a bare id — is
+# an OpenRouter id and travels unchanged, which is why OpenRouter is absent
+# from this set: it is the default, not a prefix to strip.
+ROUTING_PREFIXES: frozenset[str] = frozenset({"openai", "anthropic", "gemini", "ollama"})
+
+
+def route_model(model: str, provider: str = "openrouter") -> tuple[str, str]:
+    """(provider that will serve this call, model id to send upstream).
+
+    A namespaced id wins over the requested provider, because the id is what
+    the user actually picked; an unknown prefix is left alone and defaults to
+    OpenRouter, so "meta-llama/llama-3.3-70b-instruct:free" still works.
+    """
+    if provider == "demo":
+        return "demo", model
+    prefix, sep, rest = model.partition("/")
+    lowered = prefix.lower()
+    if sep and lowered in ROUTING_PREFIXES and rest:
+        return lowered, rest
+    if sep and lowered == "openrouter" and rest:
+        # explicit escape hatch for ids that would otherwise look namespaced,
+        # e.g. openrouter/openai/gpt-4o-mini
+        return "openrouter", rest
+    return "openrouter", model
+
 
 def resolve_provider(model: str, provider: str = "openrouter") -> str:
     """The provider that will actually serve this model id.
@@ -102,11 +133,7 @@ def resolve_provider(model: str, provider: str = "openrouter") -> str:
     Callers use it to label errors correctly: a request nominally sent to
     "openrouter" is served by Ollama when the model carries the local prefix.
     """
-    if provider == "demo":
-        return "demo"
-    if model.startswith(OLLAMA_PREFIX):
-        return "ollama"
-    return provider
+    return route_model(model, provider)[0]
 
 
 def chat(
@@ -121,110 +148,130 @@ def chat(
 
     The returned dict always carries a "provider" key naming the provider
     that actually served the call, so the audit log records the real one
-    rather than what the client asked for.
+    rather than what the client asked for. The model string is passed
+    through verbatim after prefix stripping — there is no whitelist, so a
+    custom id reaches the provider and its own error comes back.
     """
-    if provider == "demo":  # scripted playground demo: no key, no network
+    target, upstream_model = route_model(model, provider)
+
+    if target == "demo":  # scripted playground demo: no key, no network
         result = get_provider("demo").chat("", model, system_context, user_message)
         return {**result, "provider": "demo"}
 
-    # Local models are routed by model id, not by the request's provider, and
-    # are keyless by design — an Ollama daemon has no BYOK credential.
-    if model.startswith(OLLAMA_PREFIX):
-        local_model = model[len(OLLAMA_PREFIX):]
-        result = get_provider("ollama").chat(
-            "", local_model, system_context, user_message
+    if target in KEYLESS_PROVIDERS:
+        # Ollama needs no credential; the stored value, if any, is a base-URL
+        # override for a daemon that is not on localhost.
+        override = _get_user_key(db, user_id, target) or ""
+        result = get_provider(target).chat(
+            override, upstream_model, system_context, user_message
         )
-        return {**result, "provider": "ollama"}
+        return {**result, "provider": target}
 
-    api_key = _get_user_key(db, user_id, provider)
+    api_key = _get_user_key(db, user_id, target)
     if api_key is None:
         raise LookupError(
-            f"No {provider} API key saved — add one on the API Keys page to chat."
+            f"No {provider_label(target)} API key saved — add one on the "
+            "API Keys page to chat."
         )
-    result = get_provider(provider).chat(api_key, model, system_context, user_message)
-    return {**result, "provider": provider}
+    result = get_provider(target).chat(
+        api_key, upstream_model, system_context, user_message
+    )
+    return {**result, "provider": target}
 
 
 # --- model catalog ------------------------------------------------------------
 
-OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
-
-# Curated paid options shown alongside the live free list.
-PAID_MODELS = [
-    {"id": "openai/gpt-4o-mini", "name": "GPT-4o mini"},
-    {"id": "anthropic/claude-sonnet-4.6", "name": "Claude Sonnet 4.6"},
-    {"id": "anthropic/claude-haiku-4.5", "name": "Claude Haiku 4.5"},
-    {"id": "google/gemini-2.5-flash", "name": "Gemini 2.5 Flash"},
-]
-
-# Keyless models served by a local Ollama daemon. Only surfaced when
-# SHOW_OLLAMA=true — see Settings.show_ollama.
-LOCAL_MODELS = [
-    {"id": "ollama/llama3.2", "name": "Llama 3.2 (local)"},
-    {"id": "ollama/qwen2.5:3b", "name": "Qwen2.5 3B (local)"},
-]
-
-# Shown when OpenRouter is unreachable or the user has no key yet.
-FALLBACK_FREE_MODELS = [
-    {"id": "meta-llama/llama-3.3-70b-instruct:free", "name": "Llama 3.3 70B Instruct (free)"},
-    {"id": "google/gemma-3-27b-it:free", "name": "Gemma 3 27B (free)"},
-    {"id": "deepseek/deepseek-chat-v3.1:free", "name": "DeepSeek V3.1 (free)"},
-]
-
 _MODELS_CACHE_TTL = 3600.0  # 1 hour
-_models_cache: dict[str, Any] = {"at": 0.0, "free": None}
+# keyed per (user, provider): a catalog is fetched with that user's key
+_models_cache: dict[tuple[int, str], dict[str, Any]] = {}
 
 
-def _fetch_free_models(api_key: str) -> list[dict[str, Any]]:
-    """Top free models from OpenRouter's live catalog, by context length."""
-    resp = httpx.get(
-        OPENROUTER_MODELS_URL,
-        headers={"Authorization": f"Bearer {api_key}"},
-        timeout=20.0,
-    )
-    resp.raise_for_status()
-    models = resp.json()["data"]
-
-    def _is_free_chat_model(m: dict[str, Any]) -> bool:
-        pricing = m.get("pricing", {})
-        if pricing.get("prompt") != "0" or pricing.get("completion") != "0":
-            return False
-        # only text-out chat models: zero-priced media previews (music/image,
-        # e.g. text+image->text+audio) would fail a chat completion call
-        arch = m.get("architecture", {})
-        modality = arch.get("modality") or ""
-        out = arch.get("output_modalities") or []
-        return set(out) == {"text"} if out else modality.endswith("->text")
-
-    free = [m for m in models if _is_free_chat_model(m)]
-    free.sort(key=lambda m: m.get("context_length") or 0, reverse=True)
-    return [{"id": m["id"], "name": m.get("name") or m["id"]} for m in free[:6]]
+def _saved_providers(db: Session, user_id: int) -> set[str]:
+    rows = db.execute(
+        select(provider_keys.c.provider).where(provider_keys.c.user_id == user_id).distinct()
+    ).scalars()
+    return {str(p).lower() for p in rows}
 
 
-def _catalog(free: list[dict[str, Any]], source: str) -> dict[str, Any]:
-    """Assemble the response; the local group is opt-in via SHOW_OLLAMA."""
-    out: dict[str, Any] = {"free": free, "paid": PAID_MODELS, "source": source}
-    if get_settings().show_ollama:
-        out["local"] = LOCAL_MODELS
-    return out
+def _namespaced(provider: str, model_id: str) -> str:
+    """The id the client sends back to /chat.
+
+    OpenRouter ids keep their native vendor/model form — except where that
+    form collides with a routing prefix. "anthropic/claude-sonnet-4.6" is a
+    real OpenRouter id, but bare it would route straight to Anthropic and
+    demand a key the user never needed, so it is qualified explicitly.
+    """
+    if provider != "openrouter":
+        return f"{provider}/{model_id}"
+    vendor = model_id.partition("/")[0].lower()
+    return f"openrouter/{model_id}" if vendor in ROUTING_PREFIXES else model_id
+
+
+def _fetch_provider_models(
+    db: Session, user_id: int, provider: str
+) -> list[dict[str, Any]]:
+    """Live catalog for one provider, cached for an hour per user."""
+    now = time.time()
+    cached = _models_cache.get((user_id, provider))
+    if cached and now - cached["at"] < _MODELS_CACHE_TTL:
+        return cached["models"]
+
+    key = _get_user_key(db, user_id, provider) or ""
+    models = get_provider(provider).list_models(key)
+    normalised = [
+        {
+            "id": _namespaced(provider, m["id"]),
+            "name": m.get("name") or m["id"],
+            "context_length": m.get("context_length"),
+            "is_free": bool(m.get("is_free")),
+        }
+        for m in models
+        if m.get("id")
+    ]
+    _models_cache[(user_id, provider)] = {"at": now, "models": normalised}
+    return normalised
 
 
 def get_model_catalog(db: Session, user_id: int) -> dict[str, Any]:
-    """Free + paid (+ optional local) groups; free is live from OpenRouter, cached 1h."""
-    now = time.time()
-    if _models_cache["free"] is not None and now - _models_cache["at"] < _MODELS_CACHE_TTL:
-        return _catalog(_models_cache["free"], "live")
+    """Every configured provider's live catalog, grouped.
 
-    api_key = _get_user_key(db, user_id, "openrouter")
-    if api_key is not None:
+    One provider failing must never cost the user the others, so a failure
+    becomes an `error` on that group rather than an exception.
+    """
+    wanted = _saved_providers(db, user_id) & set(KEYED_PROVIDERS)
+    if get_settings().show_ollama:
+        wanted.add("ollama")  # keyless, so it needs no saved credential
+
+    groups: list[dict[str, Any]] = []
+    any_live = False
+    for provider in KEYED_PROVIDERS:  # stable, curated ordering
+        if provider not in wanted:
+            continue
+        group: dict[str, Any] = {
+            "provider": provider,
+            "label": provider_label(provider),
+            "free": [],
+            "paid": [],
+        }
         try:
-            free = _fetch_free_models(api_key)
-            if free:
-                _models_cache.update(at=now, free=free)
-                return _catalog(free, "live")
-        except Exception:  # noqa: BLE001 — any catalog failure degrades to fallback
-            pass
-    return _catalog(FALLBACK_FREE_MODELS, "fallback")
+            models = _fetch_provider_models(db, user_id, provider)
+            group["free"] = [m for m in models if m["is_free"]]
+            group["paid"] = [m for m in models if not m["is_free"]]
+            any_live = any_live or bool(models)
+        except Exception as exc:  # noqa: BLE001 — one bad provider, not a bad response
+            group["error"] = str(exc)[:300] if str(exc) else exc.__class__.__name__
+        groups.append(group)
+
+    return {"groups": groups, "source": "live" if any_live else "fallback"}
+
+
+def clear_models_cache(user_id: int | None = None, provider: str | None = None) -> None:
+    """Drop cached catalogs — called whenever a key is saved or removed."""
+    if user_id is None:
+        _models_cache.clear()
+        return
+    for key in [k for k in _models_cache if k[0] == user_id and (provider in (None, k[1]))]:
+        _models_cache.pop(key, None)
 
 
 # --- routes -------------------------------------------------------------------
@@ -244,7 +291,14 @@ def list_models(
 
 class ProviderKeyIn(BaseModel):
     provider: str = Field(default="openrouter", max_length=50)
-    api_key: str = Field(min_length=8, max_length=512)
+    # `api_key` is the original field name; `key` is accepted as an alias so
+    # either spelling works for existing clients and new integrations alike.
+    api_key: str | None = Field(default=None, max_length=512)
+    key: str | None = Field(default=None, max_length=512)
+
+    @property
+    def secret(self) -> str:
+        return (self.api_key or self.key or "").strip()
 
 
 class ProviderKeyOut(BaseModel):
@@ -260,22 +314,39 @@ def save_provider_key(
     db: Session = Depends(get_db),
 ) -> ProviderKeyOut:
     provider = body.provider.lower()
-    try:
-        get_provider(provider)
-    except ValueError:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"unknown provider '{provider}'")
+    if provider not in KEYED_PROVIDERS:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            f"unknown provider '{provider}' — expected one of {', '.join(KEYED_PROVIDERS)}",
+        )
+    secret = body.secret
+    # Ollama stores a base URL rather than a credential, so it has no minimum
+    # length to enforce beyond being present.
+    if len(secret) < (8 if provider != "ollama" else 1):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "api_key is required (at least 8 characters)",
+        )
 
+    # upsert per (user, provider): replacing a key must not leave the old one
+    # behind, or a revoked credential stays usable via the ordering fallback
+    db.execute(
+        provider_keys.delete()
+        .where(provider_keys.c.user_id == user.id)
+        .where(provider_keys.c.provider == provider)
+    )
     db.execute(
         provider_keys.insert().values(
             user_id=user.id,
             provider=provider,
-            encrypted_key=encrypt_key(body.api_key),
+            encrypted_key=encrypt_key(secret),
             created_at=datetime.now(timezone.utc),
         )
     )
     db.commit()
+    clear_models_cache(user.id, provider)  # next /models refetches with the new key
     # never return the key again — only the last 4 chars
-    return ProviderKeyOut(provider=provider, key_last4=body.api_key[-4:])
+    return ProviderKeyOut(provider=provider, key_last4=secret[-4:])
 
 
 class SavedKeyOut(BaseModel):
@@ -314,3 +385,48 @@ def list_provider_keys(
             )
         )
     return out
+
+
+@router.delete("/provider/{provider}")
+def delete_provider_key(
+    provider: str,
+    user: UserOut = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Forget a saved key. Scoped to the owner, so ids cannot be probed."""
+    target = provider.lower()
+    result = db.execute(
+        provider_keys.delete()
+        .where(provider_keys.c.user_id == user.id)
+        .where(provider_keys.c.provider == target)
+    )
+    db.commit()
+    if not result.rowcount:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no {target} key saved")
+    clear_models_cache(user.id, target)
+    return {"provider": target, "removed": True}
+
+
+@router.post("/provider/{provider}/test")
+def test_provider_key(
+    provider: str,
+    user: UserOut = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Try the provider's catalog with whatever is saved.
+
+    Powers the API Keys page's "Test connection" — it proves the credential
+    (or, for Ollama, the base URL) actually works before a demo depends on it.
+    """
+    target = provider.lower()
+    if target not in KEYED_PROVIDERS:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"unknown provider '{target}'")
+    key = _get_user_key(db, user.id, target) or ""
+    if not key and target not in KEYLESS_PROVIDERS:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"no {target} key saved")
+    try:
+        models = get_provider(target).list_models(key)
+    except Exception as exc:  # noqa: BLE001 — the message is the whole point here
+        return {"provider": target, "ok": False, "error": str(exc)[:300]}
+    clear_models_cache(user.id, target)
+    return {"provider": target, "ok": True, "model_count": len(models)}
