@@ -168,11 +168,25 @@ def test_hinglish_decision_and_unresolved() -> None:
     ("budget under 2000", "constraints.budget.max", 2000),
     ("max 5k", "constraints.budget.max", 5000),
     ("40k tak", "constraints.budget.max", 40000),
-    ("2000 se zyada nahi", "constraints.budget.max", 2000),
+    ("2000 rupees se zyada nahi", "constraints.budget.max", 2000),
     ("not more than 1 lakh", "constraints.budget.max", 100000),
 ])
 def test_money_forms(text: str, path: str, value: int) -> None:
     assert fields(extract(text).state).get(path) == value
+
+
+@pytest.mark.parametrize("text", [
+    "2000 se zyada nahi",          # a ceiling on an unnamed quantity
+    "nothing over 4999",
+    "max 24",
+])
+def test_a_bare_ceiling_is_not_money(text: str) -> None:
+    """A qualifier says how much, never of what.
+
+    These used to become rupees because a ceiling word alone made any nearby
+    number an amount — the same path that stored "24 tonnes" as ₹24.
+    """
+    assert "constraints.budget.max" not in fields(extract(text).state)
 
 
 def test_specs_are_not_mistaken_for_money() -> None:

@@ -23,6 +23,7 @@ from dataclasses import dataclass, field as dc_field
 from typing import Any, Callable, Iterable
 
 from app.schema import normalizers as norm
+from app.schema import valuetype
 
 # merge policies
 REPLACE = "replace"          # latest wins (scalars)
@@ -347,6 +348,28 @@ for _spec in REGISTRY:
 
 QUARANTINE = "_unmapped"
 
+# Words that say *which* value, never *what* it is. A qualifier is never a
+# field name on its own: `constraints.budget.max` has the leaf "max", and
+# registering that as an alias made "max 24" resolve to the budget — the same
+# proximity mistake as reading "max load ... 24 tonnes" as ₹24.
+QUALIFIERS = frozenset({
+    "min", "max", "start", "end", "from", "to", "before", "after",
+    "current", "previous", "target", "actual", "first", "last", "total",
+})
+
+
+def field_alias(spec: FieldSpec) -> str:
+    """The name a person would call this field.
+
+    For a flat path that is the leaf. For a nested one whose leaf is a
+    qualifier, it is the segment above — `constraints.budget.max` is called
+    "budget", not "max".
+    """
+    parts = spec.path.split(".")
+    if len(parts) > 2 and parts[-1] in QUALIFIERS:
+        return parts[-2]
+    return spec.leaf
+
 
 class UnmappedKey(Exception):
     """A key that resolves to no canonical path."""
@@ -364,16 +387,60 @@ def resolve(raw_key: str) -> FieldSpec | None:
     return None
 
 
+def is_degenerate(spec: FieldSpec, raw_value: Any) -> bool:
+    """Whether a value is really just an echo of the field it claims to fill.
+
+    Three shapes, all produced by real messages:
+
+      * the field's own name as its value — "What's the max load again?"
+        stored `area: "area"`
+      * a bare pronoun or function word — "I run a poultry farm" stored
+        `name: "I"`
+      * anything already in the field's alias set, which is the same echo
+        wearing a synonym
+
+    A question about a field is not an assertion of one.
+    """
+    if not isinstance(raw_value, str):
+        return False
+    text = " ".join(raw_value.split()).strip(" .,;:!?").lower()
+    if not text:
+        return True
+    if text in ECHO_STOPWORDS:
+        return True
+    aliases = {spec.leaf.lower(), spec.path.lower(),
+               *(a.lower() for a in spec.aliases)}
+    flattened = text.replace(" ", "_")
+    return text in aliases or flattened in aliases
+
+
+# Words that are never a value, only a way of referring to one.
+ECHO_STOPWORDS = frozenset({
+    "i", "me", "my", "mine", "we", "us", "our", "you", "your", "he", "she",
+    "it", "they", "them", "this", "that", "these", "those", "who", "what",
+    "which", "there", "here", "the", "a", "an", "some", "any",
+    # "none" is deliberately absent: for `constraints.no_ui_libs` it is the
+    # answer, not a refusal to answer. Only non-answers belong here.
+    "n/a", "null", "nil", "not provided", "not specified", "unknown",
+    "tbd", "todo", "-", "--", "???",
+})
+
+
 def canonicalize(
     raw_key: str, raw_value: Any, *, confidence: float = 1.0, source: str = "rules",
-    now: Any = None,
+    now: Any = None, context: str = "",
 ) -> tuple[str, Any] | None:
     """Alias + raw value -> (canonical_path, canonical_value), or None.
 
     None means "do not write this" and the caller is expected to quarantine it.
-    Three separate reasons produce None — unknown alias, value the normalizer
-    rejects, confidence below the field's floor — and all three are failures
-    of the same kind: we do not know enough to assert a fact.
+    Every reason that produces None is the same kind of failure: we do not know
+    enough to assert a fact, so we decline rather than coerce.
+
+    Matching fails closed. Resolving an alias is not enough — the value's own
+    kind has to be compatible with the field's declared type, or the match is
+    refused. Without that check the alias table vacuumed any number near a
+    qualifier into whichever field had the nearest alias, which is how
+    "24 tonnes" became ₹24.
     """
     spec = resolve(raw_key)
     if spec is None:
@@ -381,6 +448,19 @@ def canonicalize(
     floor = max(spec.required_confidence, 0.0)
     if confidence < floor:
         return None
+    if is_degenerate(spec, raw_value):
+        return None
+    if isinstance(raw_value, str):
+        # The field's own name joins the context. A caller that says
+        # `canonicalize("budget", "75000")` has named the field explicitly, and
+        # that is a legitimate money signal — the guard exists to stop a value
+        # being *vacuumed* into a field by proximity, not to second-guess a
+        # direct assignment. Units still win: "24 tonnes" reads as a quantity
+        # even when addressed to `budget`, which is the case that matters.
+        field_words = f"{raw_key} {spec.path}".replace(".", " ").replace("_", " ")
+        reading = valuetype.classify(raw_value, context=f"{context} {field_words}")
+        if not valuetype.is_compatible(spec.type, reading):
+            return None
     try:
         if spec.type == "date":
             value = spec.normalizer(raw_value, now=now) if now else spec.normalizer(raw_value)
@@ -503,4 +583,5 @@ __all__ = [
     "ACTIVE_SECTIONS", "DuplicatePathError",
     "resolve", "canonicalize", "gliner_labels", "write_path", "read_path",
     "quarantine", "assert_no_duplicate_paths", "leaf_paths_in",
+    "is_degenerate", "ECHO_STOPWORDS", "QUALIFIERS", "field_alias",
 ]

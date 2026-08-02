@@ -98,6 +98,7 @@ def _section(state: StructuredState, name: str) -> dict[str, Any]:
 def _put(
     state: StructuredState, origins: dict[str, str], source: str,
     section: str, key: str, value: Any, *, confidence: float | None = None,
+    context: str = "",
 ) -> bool:
     """The one door into state. Returns True if the write landed.
 
@@ -130,8 +131,10 @@ def _put(
     if confidence is None:
         confidence = canon.CONFIDENCE.get(source, 1.0)
 
+    # the clause the value came from: "24" alone says nothing, "24 tonnes"
+    # in "max load per container" says it is not money
     resolved = canon.canonicalize(
-        raw_path, value, confidence=confidence, source=source
+        raw_path, value, confidence=confidence, source=source, context=context
     )
     if resolved is None:
         _quarantine(state, raw_path, value, source, confidence)
@@ -182,11 +185,11 @@ def _section_for(raw_key: str) -> str:
 _ALIAS_MATCHER = rules.build_alias_matcher({
     alias: spec.path
     for spec in canon.REGISTRY
-    for alias in (spec.leaf, *spec.aliases)
+    for alias in (canon.field_alias(spec), *spec.aliases)
     # Two-letter aliases match inside other words too readily. Everyday
     # English words are kept, but the matcher restricts them to a declarative
     # form — see rules.GENERIC_ALIASES.
-    if len(alias) >= 3
+    if len(alias) >= 3 and alias not in canon.QUALIFIERS
 })
 
 # Enum fields are the only ones a bare value can identify on its own: "prefer
@@ -236,15 +239,17 @@ def extract_rules(text: str) -> tuple[StructuredState, dict[str, str]]:
 
     for clause in rules.split_clauses(text):
         if name := rules.find_name(clause):
-            _put(state, origins, SOURCE_RULES, "facts", "name", name)
+            _put(state, origins, SOURCE_RULES, "facts", "name", name, context=clause)
 
         # a route claims both endpoints before the city rule can read the
         # origin as a home town
         if route := rules.find_route(clause):
-            _put(state, origins, SOURCE_RULES, "constraints", "origin", route[0])
-            _put(state, origins, SOURCE_RULES, "constraints", "destination", route[1])
+            _put(state, origins, SOURCE_RULES, "constraints", "origin", route[0],
+                 context=clause)
+            _put(state, origins, SOURCE_RULES, "constraints", "destination", route[1],
+                 context=clause)
         elif city := rules.find_city(clause):
-            _put(state, origins, SOURCE_RULES, "facts", "city", city)
+            _put(state, origins, SOURCE_RULES, "facts", "city", city, context=clause)
 
         if money := rules.find_money(clause):
             amount, _is_ceiling = money
@@ -260,23 +265,28 @@ def extract_rules(text: str) -> tuple[StructuredState, dict[str, str]]:
             if r not in rejected_modes:
                 rejected_modes.append(r)
         if mode:
-            _put(state, origins, SOURCE_RULES, "preferences", "contact_mode", mode)
+            _put(state, origins, SOURCE_RULES, "preferences", "contact_mode", mode,
+                 context=clause)
 
         for value in rules.find_dates(clause):
             if value not in seen_dates:
                 seen_dates.append(value)
 
         if decision := rules.find_decision(clause):
-            _put(state, origins, SOURCE_RULES, "decisions", "choice", decision)
+            _put(state, origins, SOURCE_RULES, "decisions", "choice", decision,
+                 context=clause)
 
         if qty := rules.find_order_quantity(clause):
-            _put(state, origins, SOURCE_RULES, "constraints", "quantity", qty)
+            _put(state, origins, SOURCE_RULES, "constraints", "quantity", qty,
+                 context=clause)
 
         if employer := rules.find_employer(clause):
-            _put(state, origins, SOURCE_RULES, "facts", "organization", employer)
+            _put(state, origins, SOURCE_RULES, "facts", "organization", employer,
+                 context=clause)
 
         if payment := rules.find_payment(clause):
-            _put(state, origins, SOURCE_RULES, "preferences", "payment_method", payment)
+            _put(state, origins, SOURCE_RULES, "preferences", "payment_method", payment,
+                 context=clause)
 
         if m := rules._REQUIREMENT.search(clause):
             # the trigger word is not enough — "need it before 15 August"
@@ -293,7 +303,7 @@ def extract_rules(text: str) -> tuple[StructuredState, dict[str, str]]:
 
         if m := rules._GOAL.search(clause):
             if goal := rules.valid_capture(m.group(1)):
-                _put(state, origins, SOURCE_RULES, "goals", "primary", goal)
+                _put(state, origins, SOURCE_RULES, "goals", "primary", goal, context=clause)
 
         # Generic assignments last: every rule above is higher precision, and
         # `_put` is first-writer-wins, so this only ever fills gaps. It is what
@@ -301,12 +311,13 @@ def extract_rules(text: str) -> tuple[StructuredState, dict[str, str]]:
         # anything at all — the specific rules above only know one domain.
         for path, raw_value in rules.find_alias_assignments(clause, _ALIAS_MATCHER):
             section, key = path.split(".", 1)
-            _put(state, origins, SOURCE_RULES, section, key, raw_value)
+            _put(state, origins, SOURCE_RULES, section, key, raw_value,
+                 context=clause)
 
         for raw_key, raw_value in rules.find_assignments(clause):
             if raw_key:
                 _put(state, origins, SOURCE_RULES, _section_for(raw_key), raw_key,
-                     raw_value)
+                     raw_value, context=clause)
             else:
                 _put_enum_guess(state, origins, raw_value)
 

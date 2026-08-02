@@ -21,6 +21,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from app.schema import valuetype
+
 # --- vocabulary ---------------------------------------------------------------
 
 # Words that can follow a name trigger but are never a name. Without this,
@@ -160,33 +162,28 @@ _BUDGET_WORD = re.compile(r"\b(?:budget|price|cost|spend|afford|paisa|paise)\b",
 def find_money(clause: str) -> tuple[int, bool] | None:
     """(amount, is_ceiling), or None when nothing money-like is present.
 
-    A bare number is only money when something says so — a currency token, a
-    k/lakh/crore scale, or a budget word in the clause. "16GB RAM" and
-    "3 sessions" must not become a budget.
+    The money decision belongs to `valuetype.classify`, not to a second copy
+    of the rules here — the two drifted, and this one had the looser test:
+    a ceiling word alone ("max", "over") made any nearby number an amount, so
+    "max load per container is 24 tonnes" became ₹24. A qualifier says how
+    much, never of what.
+
+    `is_ceiling` is still read from this clause, because that part genuinely
+    is a matter of phrasing rather than of the value's kind.
     """
-    budgetish = bool(_BUDGET_WORD.search(clause))
     ceiling = bool(_CEILING.search(clause))
-    budgetish = budgetish or ceiling
-    for m in _MONEY.finditer(clause):
-        if not m.group("num"):
+    # scan each number in the clause: the first one that reads as money wins,
+    # so "16GB RAM and a 5k budget" still finds the budget
+    for m in re.finditer(r"[₹$€£]?\s*\d[\d,. ]*\s*[A-Za-z][A-Za-z.]*|[₹$€£]?\s*\d[\d,.]*", clause):
+        span = m.group(0).strip()
+        if not span:
             continue
-        scale = (m.group("scale") or "").lower().rstrip(".")
-        has_currency = bool(m.group("pre") or m.group("post"))
-        if not (has_currency or scale or budgetish):
+        reading = valuetype.classify(span, context=clause)
+        if reading.kind != valuetype.MONEY or not reading.number:
             continue
-        # a scale-less number immediately followed by letters is a spec, not
-        # money: "16GB", "3bhk"
-        tail = clause[m.end("num"):m.end("num") + 2]
-        if not has_currency and not scale and re.match(r"[A-Za-z]{2}", tail):
+        if reading.number <= 0:
             continue
-        try:
-            amount = float(m.group("num").replace(",", ""))
-        except ValueError:
-            continue
-        amount *= _MONEY_SCALES.get(scale, 1)
-        if amount <= 0:
-            continue
-        return int(amount), ceiling
+        return int(reading.number), ceiling
     return None
 
 

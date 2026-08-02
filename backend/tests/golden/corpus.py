@@ -29,10 +29,17 @@ GOLDEN: list[tuple[str, str, dict, list[str]]] = [
      "payment method: UPI, delivery address: 12 MG Road, quantity 2",
      {"preferences.payment_method": "upi", "constraints.quantity": 2},
      []),
+    # A currency marker is now required. "Nothing over 4999" states a ceiling
+    # on an unnamed quantity — it could be rupees, grams or minutes — and
+    # guessing rupees is the behaviour that put 24 tonnes in a budget field.
     ("ecom_price_cap",
-     "Nothing over 4999 please, I'll pay by card",
+     "Nothing over ₹4999 please, I'll pay by card",
      {"constraints.budget.max": 4999, "preferences.payment_method": "card"},
      []),
+    ("ecom_bare_ceiling_declines",
+     "Nothing over 4999 please",
+     {},
+     ["constraints.budget.max"]),
     ("ecom_return",
      "I need it before 15 August",
      {"constraints.deadline": "-08-15"},
