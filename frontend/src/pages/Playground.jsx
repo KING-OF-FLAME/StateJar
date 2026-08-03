@@ -147,9 +147,14 @@ const TIER_META = {
   llm: { label: 'LLM', hint: 'Strict-JSON extraction via your own provider key, messy input only' },
 }
 
-function TierChips({ sources, origins }) {
+function TierChips({ sources, origins, tiers: outcomes, notice }) {
   const tiers = Array.isArray(sources) ? sources : sources ? [sources] : []
   if (!tiers.length) return null
+  // a tier that ran and failed earns its own chip: showing only successes is
+  // how tier 3 being down in production looked identical to it not applying
+  const failed = Object.entries(outcomes || {})
+    .filter(([name, status]) => status === 'unavailable' && !tiers.includes(name))
+    .map(([name]) => name)
   const counts = {}
   for (const tier of Object.values(origins || {})) {
     counts[tier] = (counts[tier] || 0) + 1
@@ -170,6 +175,14 @@ function TierChips({ sources, origins }) {
           </span>
         )
       })}
+      {failed.map((tier) => (
+        <span key={tier} className="tier-chip tier-failed"
+              title={`${TIER_META[tier]?.label || tier} was attempted and did not answer`}>
+          <span className="tier-dot" aria-hidden="true" />
+          {TIER_META[tier]?.label || tier} unavailable
+        </span>
+      ))}
+      {notice && <span className="tier-notice">{notice}</span>}
     </div>
   )
 }
@@ -364,6 +377,66 @@ function UnmappedSection({ value }) {
   )
 }
 
+/* One input, one button: paste a handle from any earlier session and adopt
+   its state here. This is the claim made operable — the state moves, the
+   model does not have to be the same one, and nothing is replayed. */
+function RestoreHandle({ onRestore, disabled }) {
+  const [open, setOpen] = useState(false)
+  const [value, setValue] = useState('')
+  const [status, setStatus] = useState(null)
+  const [busy, setBusy] = useState(false)
+
+  const submit = async (e) => {
+    e.preventDefault()
+    setBusy(true)
+    setStatus(null)
+    const r = await onRestore(value)
+    setBusy(false)
+    if (r.ok) {
+      setStatus({ ok: true, text: `Restored ${r.count} fields` })
+      setValue('')
+      setTimeout(() => { setOpen(false); setStatus(null) }, 1800)
+    } else {
+      setStatus({ ok: false, text: r.error })
+    }
+  }
+
+  if (!open) {
+    return (
+      <button
+        className="btn btn-ghost pg-mini" disabled={disabled}
+        onClick={() => setOpen(true)}
+        title="Paste a handle from another session to restore its state here"
+      >
+        ↓ Restore handle
+      </button>
+    )
+  }
+  return (
+    <form className="restore-form" onSubmit={submit}>
+      <input
+        className="restore-input" autoFocus value={value} spellCheck={false}
+        placeholder="shm_…" aria-label="Handle to restore"
+        onChange={(e) => setValue(e.target.value)}
+      />
+      <button className="btn btn-primary pg-mini" type="submit" disabled={busy}>
+        {busy ? '…' : 'Restore'}
+      </button>
+      <button
+        className="btn btn-ghost pg-mini" type="button"
+        onClick={() => { setOpen(false); setStatus(null) }}
+      >
+        ✕
+      </button>
+      {status && (
+        <span className={`restore-status${status.ok ? ' ok' : ' err'}`}>
+          {status.text}
+        </span>
+      )}
+    </form>
+  )
+}
+
 /* ---------- model picker ---------- */
 /* Grouped by provider: only providers the user has configured appear, so the
    list is a picture of their own account rather than a menu of everything
@@ -528,6 +601,8 @@ export default function Playground() {
   const [tab, setTab] = useState(0)
   const [state, setState] = useState(null)          // current memory state
   const [handle, setHandle] = useState(null)
+  const [extractionTiers, setExtractionTiers] = useState({})
+  const [tierNotice, setTierNotice] = useState('')
   const [extractionSource, setExtractionSource] = useState(null)  // ["rules","gliner2",…]
   const [extractionOrigins, setExtractionOrigins] = useState({})  // "facts.name" -> tier
   const [changed, setChanged] = useState(null)      // dotted paths updated by last ingest
@@ -675,6 +750,10 @@ export default function Playground() {
   const applyIngest = (ing) => {
     setChanged(new Set(diffPaths(stateRef.current, ing.state)))
     if (ing.extraction_source) setExtractionSource(ing.extraction_source)
+    // a tier that was attempted and failed is not the same as one that never
+    // ran; the badge row says which, so "rules only" is never ambiguous
+    setExtractionTiers(ing.extraction_tiers || {})
+    setTierNotice(ing.extraction_notice || '')
     if (ing.extraction_origins) setExtractionOrigins(ing.extraction_origins)
     stateRef.current = ing.state
     setState(ing.state)
@@ -1158,6 +1237,32 @@ export default function Playground() {
     setTab(0)
   }
 
+  /* Paste a handle from another session — the closing demo move. Nothing is
+     recomputed: the stored bytes are adopted into this session, so the handle
+     that comes back is the handle that went in. A different model can then
+     answer about facts it never saw. */
+  const restoreHandle = async (raw) => {
+    const handle = (raw || '').trim()
+    if (!handle) return { ok: false, error: 'Paste a handle first.' }
+    try {
+      const r = await api('/memory/restore', {
+        method: 'POST',
+        body: { handle, session_tag: session },
+      })
+      setState(r.state)
+      setHandle(r.handle)
+      addMsg({
+        role: 'assistant',
+        content: `Restored **${r.field_count} fields** from \`${r.handle.slice(0, 18)}…\``
+          + `${r.verified ? ' — handle re-derived from the stored bytes and matches.' : ''}`
+          + `\n\nAsk me anything about them; this session never saw the original messages.`,
+      })
+      return { ok: true, count: r.field_count }
+    } catch (e) {
+      return { ok: false, error: e.message || 'Could not restore that handle.' }
+    }
+  }
+
   const copyHandle = async (h) => {
     try {
       await navigator.clipboard.writeText(h)
@@ -1276,6 +1381,10 @@ export default function Playground() {
           <button className="btn btn-ghost pg-mini" onClick={newSession} disabled={demoRunning}>
             + New session
           </button>
+          <RestoreHandle
+            disabled={demoRunning}
+            onRestore={restoreHandle}
+          />
           <ModelPicker
             groups={groups}
             choice={modelChoice}
@@ -1398,7 +1507,8 @@ export default function Playground() {
                 </>
               ) : (
                 <>
-                  <TierChips sources={extractionSource} origins={extractionOrigins} />
+                  <TierChips sources={extractionSource} origins={extractionOrigins}
+                    tiers={extractionTiers} notice={tierNotice} />
                   {handle && (
                     <p className="pg-handle-line mono">
                       handle: <span className="hl-accent">{handle}</span>

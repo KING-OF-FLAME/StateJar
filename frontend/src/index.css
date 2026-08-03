@@ -1508,3 +1508,26 @@ body.presenter-mode .card, body.presenter-mode .panel { border-color: #D8D2C8; }
 .dyn-reason { font-style: italic; }
 .unmapped-section .jt-key { color: #8A6D1D; }
 .unmapped-section .dyn-value { color: var(--ink-faint); text-decoration: line-through; }
+
+/* --- restore a handle into this session ---------------------------------- */
+.restore-form { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.restore-input {
+  font-family: var(--mono, ui-monospace, monospace); font-size: 0.78rem;
+  padding: 5px 9px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--card); color: var(--ink); width: 210px; min-width: 0;
+}
+.restore-input:focus { outline: 2px solid rgba(192, 68, 42, 0.35); outline-offset: 1px; }
+.restore-status { font-family: var(--sans); font-size: 0.74rem; }
+.restore-status.ok { color: #1F6F54; }
+.restore-status.err { color: #C0442A; }
+/* the deep-extraction degradation notice */
+.tier-notice {
+  display: block; margin-top: 6px; font-family: var(--sans); font-size: 0.72rem;
+  color: #8A6D1D; background: rgba(212, 163, 47, 0.12);
+  border-radius: 6px; padding: 4px 8px;
+}
+.tier-chip.tier-failed {
+  background: rgba(212, 163, 47, 0.14); color: #8A6D1D;
+  border-color: rgba(212, 163, 47, 0.4);
+}
+.tier-chip.tier-failed .tier-dot { background: #D4A32F; }

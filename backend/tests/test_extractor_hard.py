@@ -26,6 +26,7 @@ from app.memory.extractor import (
     extract,
     extract_rules,
 )
+from app.llm.providers import ProviderError
 from app.memory.handle import generate_handle
 from app.schema import canonical as canon
 
@@ -344,7 +345,8 @@ def test_llm_tier_fills_gaps_and_is_labelled(monkeypatch: pytest.MonkeyPatch) ->
                 "someone in our team over in that city we mentioned")
     monkeypatch.setattr(
         extractor, "merge_llm",
-        lambda text, state, origins, db=None, user_id=None, prior=None: (
+        lambda text, state, origins, db=None, user_id=None, prior=None,
+               report=None: (
             state.facts.__setitem__("city", "Chennai"),
             origins.__setitem__("facts.city", SOURCE_LLM),
             True,
@@ -355,17 +357,51 @@ def test_llm_tier_fills_gaps_and_is_labelled(monkeypatch: pytest.MonkeyPatch) ->
     assert result.origins["facts.city"] == SOURCE_LLM
 
 
-def test_llm_tier_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    """No key, no credit, malformed JSON — all must be survivable."""
+@pytest.mark.parametrize("failure", [
+    LookupError("No OpenRouter API key saved"),
+    NotImplementedError("provider has no chat support"),
+    ProviderError("OpenRouter rate limit reached"),
+])
+def test_llm_tier_degrades_on_provider_failure(
+    failure: Exception, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No key, no credit, rate limited — all must be survivable."""
     monkeypatch.setenv("EXTRACTOR_LLM_FALLBACK", "true")
     get_settings.cache_clear()
 
     def explode(*_a: Any, **_k: Any) -> Any:
-        raise RuntimeError("no provider key saved")
+        raise failure
 
     monkeypatch.setattr("app.llm.gateway.chat", explode, raising=False)
     state, origins = extract_rules("hello")
-    assert extractor.merge_llm("hello", state, origins, db=object(), user_id=1) is False
+    outcome: dict[str, str] = {}
+    landed = extractor.merge_llm(
+        "hello", state, origins, db=object(), user_id=1,
+        report=lambda status, detail: outcome.update(status=status, detail=detail),
+    )
+    assert landed is False
+    assert outcome["status"] == extractor.TIER_UNAVAILABLE
+
+
+def test_a_bug_in_the_llm_tier_is_not_swallowed(
+    monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Day-1 failure: a KeyError became a silently skipped tier.
+
+    Catching everything meant a programming error looked exactly like a
+    provider being down, and the badge showed `rules` either way. A fault that
+    is ours must surface.
+    """
+    monkeypatch.setenv("EXTRACTOR_LLM_FALLBACK", "true")
+    get_settings.cache_clear()
+
+    def explode(*_a: Any, **_k: Any) -> Any:
+        raise KeyError("choices")
+
+    monkeypatch.setattr("app.llm.gateway.chat", explode, raising=False)
+    state, origins = extract_rules("hello")
+    with pytest.raises(KeyError):
+        extractor.merge_llm("hello", state, origins, db=object(), user_id=1)
 
 
 @pytest.mark.parametrize("reply", [

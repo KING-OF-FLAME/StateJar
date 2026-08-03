@@ -36,6 +36,12 @@ class Settings(BaseSettings):
     # default because it spends the user's credit.
     extractor_llm_fallback: bool = False
     extractor_llm_model: str = "openrouter/openai/gpt-4o-mini"
+    # Tried in order when the primary fails. A prefixed id may name a
+    # different provider, so the chain crosses providers as well as models —
+    # the production outage was one free-tier model being rate limited.
+    extractor_llm_fallback_models: str = (
+        "openrouter/anthropic/claude-3.5-haiku,openai/gpt-4o-mini"
+    )
     # --- retrieval ---
     # Off by default. When true (and sentence-transformers is installed) a
     # query the keyword intent map does not recognise falls back to embedding

@@ -21,7 +21,8 @@ from app.memory.extractor import extract
 from app.memory.handle import generate_handle
 from app.memory.retriever import retrieve_minimum
 from app.memory.storage import MemoryStore
-from app.memory.versioning import evolve_state, initial_state
+from app.memory.versioning import UNHASHED_KEYS, evolve_state, initial_state
+from app.schema import canonical as canon
 from app.security import CHAT_LIMIT, limiter, user_or_ip
 from app.timeutil import iso_utc
 
@@ -110,7 +111,68 @@ def ingest(
         # the handle
         "extraction_source": extraction.sources,
         "extraction_origins": extraction.origins,
+        # what each tier did, including the ones that failed — so the UI can
+        # say "attempted and unavailable" rather than silently showing rules
+        "extraction_tiers": extraction.tiers,
+        "extraction_notice": extraction.notice,
     }
+
+
+def _changes_this_turn(
+    db: Session, user_id: int, handle: str
+) -> list[dict[str, Any]]:
+    """What this turn changed: field, prior value, new value.
+
+    State is committed by `/memory/ingest` before `/chat` assembles context, so
+    the model only ever saw post-update state and could not tell that anything
+    had moved. Asked to confirm an update it had just been given, it replied
+    "already set to 4 hours — nothing to change", which reads on stage as a
+    working update failing.
+
+    The change set is derived by diffing this state against its parent rather
+    than by disclosing the conflicts array — a conflict record carries the
+    superseded value as if it were current, which is exactly what retrieval
+    must never hand a model. Here the prior value is labelled as prior.
+    """
+    store = _store(db)
+    row = store.get_state(handle, user_id=user_id)
+    if row is None:
+        return []
+    state = row["state_json"] or {}
+    parent_handle = row.get("parent_handle") or state.get("parent_handle")
+    if not parent_handle:
+        return []
+    parent_row = store.get_state(parent_handle, user_id=user_id)
+    if parent_row is None:
+        return []
+    parent = parent_row["state_json"] or {}
+
+    changes: list[dict[str, Any]] = []
+    for section in canon.ACTIVE_SECTIONS:
+        for path in canon.leaf_paths_in(state.get(section), section):
+            before = canon.read_path(parent, path)
+            after = canon.read_path(state, path)
+            if before is None or before == after:
+                continue      # new information is not a change
+            changes.append({
+                "field": path,
+                "from": _readable(before),
+                "to": _readable(after),
+            })
+    return changes
+
+
+def _readable(value: Any) -> Any:
+    """A stored value as the user said it, for an acknowledgement line."""
+    if isinstance(value, dict):
+        if "iso" in value:
+            return value.get("raw") or value["iso"]
+        if "currency" in value:
+            return f"{value.get('currency', '')} {value.get('value')}".strip()
+        if "value" in value:
+            unit = value.get("unit")
+            return f"{value['value']} {unit}".strip() if unit else value["value"]
+    return value
 
 
 def _query_subset(
@@ -168,7 +230,9 @@ def chat(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     handle, result = _query_subset(db, user.id, body.session_tag, body.query)
-    system_context = gateway.build_system_context(handle, result["subset"])
+    system_context = gateway.build_system_context(
+        handle, result["subset"], _changes_this_turn(db, user.id, handle)
+    )
     # the model id can override the requested provider (e.g. ollama/*), so
     # error messages must name the provider that actually handled the call
     served_by = gateway.resolve_provider(body.model, body.provider)
@@ -315,6 +379,66 @@ def state_by_handle(
         "state": row["state_json"],
         "session_tag": row["session_tag"],
         "created_at": iso_utc(row["created_at"]),
+    }
+
+
+class RestoreRequest(BaseModel):
+    handle: str = Field(min_length=4, max_length=80)
+    session_tag: str = Field(min_length=1, max_length=100)
+
+
+@router.post("/memory/restore")
+def restore(
+    body: RestoreRequest,
+    user: UserOut = Depends(get_api_caller),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Adopt an existing state into another session, by its handle.
+
+    The core claim, made operable: paste a handle into a fresh session — with
+    a different model, or on a different day — and the state is there.
+
+    Nothing is recomputed. The stored bytes are written under the new session
+    tag unchanged, so the handle that comes back is the handle that went in;
+    a content address that survived a copy is the proof the copy was faithful.
+    Dedup is scoped to (handle, user_id, session_tag), so the same state
+    living in two sessions is two rows and one identity.
+    """
+    store = _store(db)
+    row = store.get_state(body.handle, user_id=user.id)
+    if row is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            "No state with that handle in your account — check the handle and "
+            "that you are signed in as the account that created it.",
+        )
+
+    state = row["state_json"]
+    store.save_state(
+        row["handle"], row["parent_handle"], state,
+        row["schema_version"] or SCHEMA_VERSION,
+        row["norm_version"] or NORM_VERSION,
+        user_id=user.id, session_tag=body.session_tag,
+        state_version=(state or {}).get("state_version"),
+    )
+    # re-derive from the bytes we just wrote: if this ever disagreed with the
+    # handle, the restore would be silently lossy
+    verified = generate_handle(
+        canonicalize({k: v for k, v in (state or {}).items()
+                      if k not in UNHASHED_KEYS}),
+        row["schema_version"] or SCHEMA_VERSION,
+        row["norm_version"] or NORM_VERSION,
+    )
+    return {
+        "handle": row["handle"],
+        "session_tag": body.session_tag,
+        "state": state,
+        "restored_from": row["session_tag"],
+        "verified": verified == row["handle"],
+        "field_count": sum(
+            len(list(canon.leaf_paths_in((state or {}).get(s), s)))
+            for s in canon.ACTIVE_SECTIONS
+        ),
     }
 
 

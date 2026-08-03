@@ -53,6 +53,18 @@ LLM_MIN_WORDS = 12
 LLM_LONG_MESSAGE = 40
 LLM_MAX_FIELDS = 2
 LLM_TIMEOUT_S = 8.0
+# A message this long that extracted nothing is worth a tier-3 call. Short
+# enough to catch "Six hours feels tight honestly"; long enough to skip "hi".
+LLM_EMPTY_WORDS = 5
+# One field per this many words is the density below which the cheap tiers
+# are assumed to have missed something.
+LLM_DENSITY = 6
+
+# What the extraction tiers reported about themselves. Metadata only — it is
+# returned beside `state`, never inside it, so it cannot reach the handle.
+TIER_OK = "ok"
+TIER_SKIPPED = "skipped"
+TIER_UNAVAILABLE = "unavailable"
 
 MODE_AUTO = "auto"
 MODE_GLINER = "gliner"
@@ -93,6 +105,12 @@ class Extraction:
     state: StructuredState
     sources: list[str] = dc_field(default_factory=lambda: [SOURCE_RULES])
     origins: dict[str, str] = dc_field(default_factory=dict)
+    # Per-tier outcome, so the badge reflects what happened rather than only
+    # what succeeded. A tier that was attempted and failed is not the same as
+    # one that never ran, and showing "rules" for both is what hid tier 3
+    # being down in production.
+    tiers: dict[str, str] = dc_field(default_factory=dict)
+    notice: str = ""
 
 
 _SECTIONS = canon.ACTIVE_SECTIONS
@@ -813,17 +831,103 @@ def _llm_should_run(text: str, state: StructuredState) -> bool:
     words = len(text.split())
     found = field_count(state)
     return (
+        # A substantive message that yielded nothing. This is the case that
+        # most needs tier 3 and the old condition missed it entirely: "Six
+        # hours feels tight honestly" is five words, so the `words >= 12`
+        # gate excluded it while it extracted zero fields.
+        (found == 0 and words >= LLM_EMPTY_WORDS)
         # substantive input the tiers below barely touched
-        (words >= LLM_MIN_WORDS and found < LLM_MAX_FIELDS)
+        or (words >= LLM_MIN_WORDS and found < LLM_MAX_FIELDS)
         or words > LLM_LONG_MESSAGE   # long enough to be carrying more
-        or found < words // 12        # dense text, sparse extraction
+        # Dense text, sparse extraction. `words // 12` was integer division,
+        # so a 14-word message needed fewer than 1 field to qualify — which,
+        # once the open extractor started finding two or three, meant tier 3
+        # stopped running on exactly the messages it was added for.
+        #
+        # The word floor matters: without it every "ok" and "thanks" spends a
+        # paid API call, because zero fields is trivially below any density.
+        or (words >= LLM_EMPTY_WORDS and found < words / LLM_DENSITY)
     )
+
+
+def llm_chain() -> list[str]:
+    """Models to try, in order. Primary first, then the configured fallbacks.
+
+    A single model is a single point of failure, and the one that failed in
+    production was a free-tier model being rate limited. Any failure advances
+    to the next entry; a prefixed id may name a different provider, so the
+    chain can cross providers as well as models.
+    """
+    settings = get_settings()
+    chain = [settings.extractor_llm_model]
+    for candidate in (settings.extractor_llm_fallback_models or "").split(","):
+        candidate = candidate.strip()
+        if candidate and candidate not in chain:
+            chain.append(candidate)
+    return chain
+
+
+def _is_recoverable(exc: BaseException) -> bool:
+    """Whether a tier-3 failure is the provider's fault rather than ours.
+
+    The distinction is the whole point: catching everything is how a KeyError
+    became a silently skipped tier and a `rules`-only badge that did not
+    reflect what happened.
+
+    KeyError and IndexError are excluded explicitly. The gateway signals "no
+    key saved" with LookupError — and those two are LookupError subclasses, so
+    a plain `except LookupError` would swallow exactly the class of bug this
+    function exists to let through.
+    """
+    from app.llm.providers import ProviderError
+
+    if isinstance(exc, (KeyError, IndexError)):
+        return False
+    if isinstance(exc, (ProviderError, NotImplementedError, LookupError)):
+        return True
+    return exc.__class__.__module__.startswith("httpx")
+
+
+def _llm_call(
+    db: Any, user_id: int, text: str, known: list[str],
+) -> tuple[dict[str, Any] | None, str]:
+    """Walk the model chain until one answers. (payload, failure_reason).
+
+    Only *provider* failures advance the chain. A programming error is
+    re-raised: catching everything is how a KeyError became a silently skipped
+    tier and a `rules`-only badge that did not reflect what happened.
+    """
+    from app.llm.gateway import chat as gateway_chat
+
+    last = ""
+    for model in llm_chain():
+        try:
+            result = gateway_chat(
+                db, user_id, model=model,
+                system_context=_llm_prompt(known), user_message=text,
+            )
+        except Exception as exc:  # noqa: BLE001 — classified immediately below
+            if not _is_recoverable(exc):
+                raise
+            last = f"{model}: {exc}"
+            logger.warning("tier3 model %s unavailable (%s: %s)",
+                           model, exc.__class__.__name__, exc)
+            continue
+
+        payload = _parse_json(result.get("text") or result.get("content") or "")
+        if payload:
+            logger.info("tier3 answered via %s", model)
+            return payload, ""
+        last = f"{model}: reply was not valid JSON"
+        logger.info("tier3 model %s returned unparseable JSON", model)
+    return None, last
 
 
 def merge_llm(
     text: str, state: StructuredState, origins: dict[str, str],
     db: Any = None, user_id: int | None = None,
     prior: dict[str, Any] | None = None,
+    report: Any = None,
 ) -> bool:
     """Open extraction. Never raises, never retries.
 
@@ -833,22 +937,14 @@ def merge_llm(
     an impossible value is refused exactly as a regex's would be.
     """
     if db is None or user_id is None:
+        report(TIER_SKIPPED, "no provider context for this call")
         return False
+    report = report or (lambda *a: None)
     known, by_qualifier = _concept_context(state, prior)
-    try:
-        from app.llm.gateway import chat as gateway_chat
 
-        result = gateway_chat(
-            db, user_id,
-            model=get_settings().extractor_llm_model,
-            system_context=_llm_prompt(known),
-            user_message=text,
-        )
-        payload = _parse_json(result.get("text") or result.get("content") or "")
-    except Exception as exc:  # noqa: BLE001 — no key, no credit, bad JSON: all fine
-        logger.info("LLM extraction tier skipped (%s)", exc.__class__.__name__)
-        return False
-    if not payload:
+    payload, failure = _llm_call(db, user_id, text, known)
+    if payload is None:
+        report(TIER_UNAVAILABLE, failure or "no usable reply")
         return False
 
     landed = False
@@ -874,6 +970,7 @@ def merge_llm(
             context=text,
         )
         known, by_qualifier = _concept_context(state, prior)
+    report(TIER_OK, "")
     return landed
 
 
@@ -930,12 +1027,32 @@ def extract(
     if _gliner_enabled() and merge_gliner(text, state, origins):
         sources.append(SOURCE_GLINER)
 
-    if _llm_should_run(text, state) and merge_llm(
-        text, state, origins, db, user_id, prior_state
-    ):
-        sources.append(SOURCE_LLM)
+    tiers: dict[str, str] = {SOURCE_RULES: TIER_OK}
+    tiers[SOURCE_GLINER] = TIER_OK if SOURCE_GLINER in sources else TIER_SKIPPED
 
-    return Extraction(state=state, sources=sources, origins=origins)
+    notice = ""
+    if _llm_should_run(text, state):
+        outcome: dict[str, str] = {}
+
+        def report(status: str, detail: str) -> None:
+            outcome["status"] = status
+            outcome["detail"] = detail
+
+        if merge_llm(text, state, origins, db, user_id, prior_state, report):
+            sources.append(SOURCE_LLM)
+        tiers[SOURCE_LLM] = outcome.get("status", TIER_UNAVAILABLE)
+        if tiers[SOURCE_LLM] == TIER_UNAVAILABLE:
+            # degrade, never blank: whatever rules and GLiNER2 found is still
+            # stored and still rendered; the caller is simply told that the
+            # deepest tier did not run for this message
+            notice = ("Deep extraction was unavailable for this message — "
+                      "showing what the deterministic tiers found.")
+            logger.warning("tier3 unavailable: %s", outcome.get("detail", ""))
+    else:
+        tiers[SOURCE_LLM] = TIER_SKIPPED
+
+    return Extraction(state=state, sources=sources, origins=origins,
+                      tiers=tiers, notice=notice)
 
 
 def extract_state_with_source(

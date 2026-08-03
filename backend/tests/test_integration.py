@@ -188,7 +188,15 @@ def test_full_pipeline_end_to_end(
     # must never appear is the sentence the user typed to establish it — the
     # claim is no chat replay, not no facts.
     assert '"name": "Ayaan"' in system_msg
-    assert "2000" not in system_msg                     # the superseded budget
+
+    # The superseded ₹2000 appears exactly once, inside the change block, and
+    # labelled as prior. That distinction is the whole of P0-4: disclosing the
+    # conflicts array hands a model a stale value as if it were current, while
+    # "was 2000, now 2500" is what lets it say "updated" instead of the
+    # "already set to 2500 — nothing to change" it used to answer.
+    state_part, _, changed_part = system_msg.partition("CHANGED BY THE USER'S")
+    assert "2000" not in state_part, "stale value must not read as current"
+    assert "was INR 2000, now INR 2500" in changed_part
 
     # 7. audit row exists and matches
     trail = client.get("/api/v1/audit", headers=headers).json()["entries"]

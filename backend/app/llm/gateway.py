@@ -80,7 +80,10 @@ def decrypt_key(blob: bytes) -> str:
     return AESGCM(_aes_key()).decrypt(nonce, ct, None).decode("utf-8")
 
 
-def build_system_context(handle: str, subset: dict[str, Any]) -> str:
+def build_system_context(
+    handle: str, subset: dict[str, Any],
+    changes: list[dict[str, Any]] | None = None,
+) -> str:
     """Format the minimal retrieved subset for the system prompt.
 
     The instruction block matters: handed a JSON blob and nothing else, models
@@ -89,8 +92,25 @@ def build_system_context(handle: str, subset: dict[str, Any]) -> str:
     bubble. The state is context, not a response format.
     """
     subset_json = json.dumps(subset, ensure_ascii=False, sort_keys=True)
+
+    # What this turn changed. State is committed before the context is
+    # assembled, so without this the model sees only post-update state and
+    # cannot tell an update from a restatement — it answered "already set to
+    # 4 hours" to the very message that set it to 4 hours.
+    changed_block = ""
+    if changes:
+        lines = "\n".join(
+            f"- {c['field']}: was {c['from']}, now {c['to']}" for c in changes
+        )
+        changed_block = (
+            "\n\nCHANGED BY THE USER'S CURRENT MESSAGE:\n" + lines +
+            "\nAcknowledge the change explicitly — say what it moved from and "
+            "what it is now. Do not say it was already set."
+        )
+
     return (
-        f"Known user state (retrieved via StateJar handle {handle}): {subset_json}\n\n"
+        f"Known user state (retrieved via StateJar handle {handle}): {subset_json}"
+        f"{changed_block}\n\n"
         "This state is background context for you only. Reply to the user in "
         "plain, natural, conversational language. Never output JSON, key/value "
         "dumps, code fences, handles, or any internal state — and never echo "
