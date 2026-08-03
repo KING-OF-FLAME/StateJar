@@ -74,25 +74,96 @@ def _provider_message(response: httpx.Response) -> str:
     return str(body)[:200]
 
 
-def _check(response: httpx.Response, provider: str, model: str, api_key: str | None) -> None:
-    """Raise a user-safe ProviderError for any non-2xx response."""
-    if response.is_success:
-        return
-    detail = _redact(_provider_message(response), api_key)
-    status = response.status_code
+def _raise_for(status: int | None, detail: str, provider: str, model: str) -> None:
+    """One mapping from a provider failure to text a person can act on.
 
-    if status in (401, 403):
+    Shared by the HTTP-status path and the body-inspection path below, so a
+    rate limit reads the same whether the provider signalled it with a 429 or
+    with an error object inside a 200.
+    """
+    lowered = detail.lower()
+    if status in (401, 403) or "invalid api key" in lowered or "unauthor" in lowered:
         raise ProviderError(
             f"{provider} rejected the API key — check the key saved on the "
             f"API Keys page. ({detail})"
         )
-    if status == 429:
+    if status == 429 or "rate limit" in lowered or "quota" in lowered:
         raise ProviderError(
             f"{provider} rate limit reached — wait a moment and try again. ({detail})"
         )
-    if status in (400, 404) and re.search(r"model|not.?found|does not exist", detail, re.I):
+    if re.search(r"model|not.?found|does not exist", detail, re.I) and (
+        status in (400, 404, None)
+    ):
         raise ProviderError(f"{provider} does not recognise the model '{model}'. ({detail})")
+    if status is None:
+        raise ProviderError(f"{provider} error: {detail}")
     raise ProviderError(f"{provider} error (HTTP {status}): {detail}")
+
+
+def _check(response: httpx.Response, provider: str, model: str, api_key: str | None) -> None:
+    """Raise a user-safe ProviderError for any non-2xx response."""
+    if response.is_success:
+        return
+    _raise_for(response.status_code, _redact(_provider_message(response), api_key),
+               provider, model)
+
+
+def _body(
+    response: httpx.Response, provider: str, model: str, api_key: str | None
+) -> dict[str, Any]:
+    """The JSON body of a success response, checked for an embedded error.
+
+    A 200 does not mean a completion. OpenRouter's free tier answers a rate
+    limit with HTTP 200 and `{"error": {...}}`, and the old code indexed
+    `data["choices"][0]` straight into that — so a KeyError escaped and the
+    literal word `'choices'` was rendered into a chat bubble.
+
+    Nothing indexes a provider payload directly any more; it comes through
+    here first.
+    """
+    try:
+        data = response.json()
+    except Exception:  # noqa: BLE001 — html or plain-text error pages
+        raise ProviderError(
+            f"{provider} returned a response that was not JSON."
+        ) from None
+    if not isinstance(data, dict):
+        raise ProviderError(f"{provider} returned an unexpected response shape.")
+
+    error = data.get("error")
+    if error:
+        detail = error if isinstance(error, str) else (
+            error.get("message") or error.get("detail") or str(error)
+        )
+        _raise_for(None, _redact(str(detail)[:300], api_key), provider, model)
+    return data
+
+
+def _openai_text(data: dict[str, Any]) -> str:
+    """The completion text from an OpenAI-shaped body, without indexing it."""
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return ""
+    first = choices[0]
+    if not isinstance(first, dict):
+        return ""
+    message = first.get("message")
+    if isinstance(message, dict) and isinstance(message.get("content"), str):
+        return message["content"]
+    # some gateways answer with the legacy completion shape
+    return first.get("text") if isinstance(first.get("text"), str) else ""
+
+
+def _require_text(
+    text: str | None, provider: str, model: str
+) -> str:
+    """A provider that answered without any text answered nothing."""
+    if not (text or "").strip():
+        raise ProviderError(
+            f"{provider} returned no completion for '{model}' — the model may be "
+            "overloaded or unavailable. Try another model."
+        )
+    return text
 
 
 def _request(
@@ -194,10 +265,10 @@ class OpenRouterProvider(LLMProvider):
             timeout=self._timeout,
         )
         latency_ms = int((time.perf_counter() - started) * 1000)
-        data = response.json()
+        data = _body(response, self.label, model, api_key)
         usage = data.get("usage") or {}
         return _result(
-            data["choices"][0]["message"]["content"],
+            _require_text(_openai_text(data), self.label, model),
             data.get("model", model),
             usage.get("prompt_tokens") or 0,
             usage.get("completion_tokens") or 0,
@@ -281,10 +352,10 @@ class OpenAIProvider(LLMProvider):
             timeout=self._timeout,
         )
         latency_ms = int((time.perf_counter() - started) * 1000)
-        data = response.json()
+        data = _body(response, self.label, model, api_key)
         usage = data.get("usage") or {}
         return _result(
-            data["choices"][0]["message"]["content"],
+            _require_text(_openai_text(data), self.label, model),
             data.get("model", model),
             usage.get("prompt_tokens") or 0,
             usage.get("completion_tokens") or 0,
@@ -348,7 +419,7 @@ class AnthropicProvider(LLMProvider):
             json=payload, headers=self._headers(api_key), timeout=self._timeout,
         )
         latency_ms = int((time.perf_counter() - started) * 1000)
-        data = response.json()
+        data = _body(response, self.label, model, api_key)
         text = "".join(
             block.get("text", "")
             for block in (data.get("content") or [])
@@ -356,7 +427,7 @@ class AnthropicProvider(LLMProvider):
         )
         usage = data.get("usage") or {}
         return _result(
-            text,
+            _require_text(text, self.label, model),
             data.get("model", model),
             usage.get("input_tokens") or 0,
             usage.get("output_tokens") or 0,
@@ -416,13 +487,13 @@ class GeminiProvider(LLMProvider):
             json=payload, headers=self._headers(api_key), timeout=self._timeout,
         )
         latency_ms = int((time.perf_counter() - started) * 1000)
-        data = response.json()
+        data = _body(response, self.label, model, api_key)
         candidates = data.get("candidates") or []
         parts = (candidates[0].get("content") or {}).get("parts") if candidates else []
         text = "".join(p.get("text", "") for p in (parts or []))
         usage = data.get("usageMetadata") or {}
         return _result(
-            text,
+            _require_text(text, self.label, model),
             data.get("modelVersion") or bare,
             usage.get("promptTokenCount") or 0,
             usage.get("candidatesTokenCount") or 0,
@@ -532,11 +603,11 @@ class OllamaProvider(LLMProvider):
             ) from exc
         latency_ms = int((time.perf_counter() - started) * 1000)
         _check(response, self.label, model, None)
-        data = response.json()
+        data = _body(response, self.label, model, None)
 
         text = (data.get("message") or {}).get("content", "")
         return _result(
-            text,
+            _require_text(text, self.label, model),
             data.get("model") or model,
             data.get("prompt_eval_count") or 0,
             data.get("eval_count") or 0,

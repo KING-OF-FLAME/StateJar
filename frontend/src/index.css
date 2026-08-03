@@ -1479,3 +1479,32 @@ body.presenter-mode .card, body.presenter-mode .panel { border-color: #D8D2C8; }
   .filter-search { min-width: 0; }
   .keys-table th, .keys-table td { padding: 8px 7px; }
 }
+
+/* --- dynamic fields & quarantine in the Memory State panel --------------- */
+/* Fix 4 stores concepts nobody declared; the panel used to render a fixed
+   namespace list and showed none of them. These read as rows rather than raw
+   JSON because a judge should not have to convert 14400 seconds in their head. */
+.dyn-section, .unmapped-section { margin-top: 10px; }
+.dyn-note {
+  display: block; font-family: var(--sans); font-size: 0.72rem;
+  color: var(--ink-faint); margin: 1px 0 5px 0; letter-spacing: 0.01em;
+}
+.dyn-row {
+  display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px;
+  padding: 3px 0 3px 16px; font-size: 0.82rem; line-height: 1.5;
+}
+.dyn-concept { color: var(--ink); font-weight: 600; }
+.dyn-qual {
+  font-size: 0.72rem; padding: 0 5px; border-radius: 4px;
+  background: rgba(192, 68, 42, 0.12); color: #C0442A; font-weight: 600;
+}
+.dyn-sep { color: var(--ink-faint); }
+.dyn-value { color: #1F6F54; font-weight: 600; }
+.dyn-raw, .dyn-type, .dyn-reason { font-size: 0.72rem; color: var(--ink-faint); }
+.dyn-type {
+  margin-left: auto; padding: 0 6px; border-radius: 4px;
+  background: rgba(26, 26, 46, 0.06);
+}
+.dyn-reason { font-style: italic; }
+.unmapped-section .jt-key { color: #8A6D1D; }
+.unmapped-section .dyn-value { color: var(--ink-faint); text-decoration: line-through; }

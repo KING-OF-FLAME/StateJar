@@ -226,14 +226,139 @@ function StateTree({ state, changed, origins }) {
       </p>
     )
   }
-  const order = ['facts', 'preferences', 'decisions', 'constraints', 'goals', 'unresolved', 'conflicts']
+  /* Every namespace the API returns, not a list written down here.
+   *
+   * The old fixed list stopped at `conflicts`, so everything the open
+   * extractor stores under `dynamic.*` was invisible — a message about a
+   * turnaround time showed an empty panel while the model was demonstrably
+   * receiving the field. Enumerating namespaces in the UI is the same
+   * closed-world mistake that was just removed from the backend, so the
+   * order below is a *preference*, and anything unlisted still renders. */
+  const preferred = ['facts', 'preferences', 'decisions', 'constraints', 'goals',
+    'dynamic', 'unresolved', 'conflicts', '_unmapped']
+  const hidden = new Set(['parent_handle', 'schema_version', 'norm_version',
+    'state_version', 'reinforced'])
+  const present = Object.keys(state).filter(
+    (k) => !hidden.has(k) && state[k] !== undefined && state[k] !== null,
+  )
+  const known = preferred.filter((k) => present.includes(k))
+  const rest = present.filter((k) => !preferred.includes(k)).sort()
+
   return (
     <div className="json-tree mono">
-      {order.filter((k) => state[k] !== undefined).map((k) => (
-        <JsonNode
-          key={k} k={k} value={state[k]} coral={k === 'conflicts'}
-          path={k} changed={changed} origins={origins}
-        />
+      {[...known, ...rest].map((k) => (
+        k === 'dynamic' ? (
+          <DynamicSection key={k} value={state[k]} changed={changed} origins={origins} />
+        ) : k === '_unmapped' ? (
+          <UnmappedSection key={k} value={state[k]} />
+        ) : (
+          <JsonNode
+            key={k} k={k} value={state[k]} coral={k === 'conflicts'}
+            path={k} changed={changed} origins={origins}
+          />
+        )
+      ))}
+    </div>
+  )
+}
+
+/* Base units are what make "1,240 kg" and "1.24 tonnes" the same value, but
+   nobody reads 14400 seconds as four hours. Both are shown: the stored number
+   is the truth, the readable form is the courtesy. */
+const UNIT_SCALES = {
+  seconds: [['s', 1], ['min', 60], ['h', 3600], ['d', 86400], ['wk', 604800]],
+  g: [['g', 1], ['kg', 1000], ['t', 1000000]],
+  ml: [['ml', 1], ['L', 1000]],
+  mm: [['mm', 1], ['cm', 10], ['m', 1000], ['km', 1000000]],
+  b: [['B', 1], ['KB', 1000], ['MB', 1e6], ['GB', 1e9], ['TB', 1e12]],
+}
+
+function readable(entry) {
+  if (!entry || typeof entry !== 'object') return null
+  if (entry.type === 'money' && typeof entry.value === 'number') {
+    return `${entry.currency || ''} ${entry.value.toLocaleString()}`.trim()
+  }
+  if (entry.type === 'date') return entry.iso
+  const scales = UNIT_SCALES[entry.unit]
+  if (!scales || typeof entry.value !== 'number') return null
+  // the largest unit the value divides into cleanly, so 14400 reads as "4 h"
+  let best = scales[0]
+  for (const s of scales) if (entry.value >= s[1]) best = s
+  const scaled = entry.value / best[1]
+  return `${Number(scaled.toFixed(3))} ${best[0]}`
+}
+
+function DynamicEntry({ concept, qualifier, entry, path, origins }) {
+  const human = readable(entry)
+  const stored = entry.type === 'date' ? entry.raw
+    : `${entry.value}${entry.unit ? ` ${entry.unit}` : ''}`
+  const origin = origins?.[path]
+  const meta = origin ? TIER_META[origin] : null
+  return (
+    <div className="dyn-row" title={meta ? `${path} — found by ${meta.label}` : path}>
+      <span className="dyn-concept">{concept}</span>
+      {qualifier && <span className="dyn-qual">[{qualifier}]</span>}
+      <span className="dyn-sep">—</span>
+      <span className="dyn-value">{human || String(entry.value ?? '')}</span>
+      {human && String(stored) !== human && (
+        <span className="dyn-raw">({stored})</span>
+      )}
+      <span className="dyn-type">{entry.type}</span>
+      {origin && <span className={`jt-origin tier-${origin}`} aria-hidden="true" />}
+    </div>
+  )
+}
+
+function DynamicSection({ value, origins }) {
+  const slugs = Object.keys(value || {})
+  if (!slugs.length) return null
+  return (
+    <div className="dyn-section">
+      <span className="jt-key">dynamic</span>
+      <span className="dyn-note">concepts learned from your message</span>
+      {slugs.map((slug) => {
+        const node = value[slug]
+        const isEnvelope = node && typeof node === 'object' && 'type' in node
+        if (isEnvelope) {
+          return (
+            <DynamicEntry
+              key={slug} concept={node.concept || slug} entry={node}
+              path={`dynamic.${slug}`} origins={origins}
+            />
+          )
+        }
+        return Object.entries(node || {}).map(([qual, sub]) => (
+          <DynamicEntry
+            key={`${slug}.${qual}`} concept={sub?.concept || slug} qualifier={qual}
+            entry={sub} path={`dynamic.${slug}.${qual}`} origins={origins}
+          />
+        ))
+      })}
+    </div>
+  )
+}
+
+/* Quarantine, shown deliberately. A system that declines to guess is the
+   thing worth showing — it is not an error state, it is the guarantee. */
+function UnmappedSection({ value }) {
+  const keys = Object.keys(value || {})
+  if (!keys.length) return null
+  const REASONS = {
+    rejected_value: 'value did not fit the field’s type',
+    low_confidence: 'extractor was not confident enough',
+    unknown_key: 'no field claims this concept',
+  }
+  return (
+    <div className="unmapped-section">
+      <span className="jt-key">declined</span>
+      <span className="dyn-note">stated, but not stored — StateJar would have had to guess</span>
+      {keys.map((k) => (
+        <div className="dyn-row" key={k}>
+          <span className="dyn-concept">{k.replace(/^dynamic\./, '')}</span>
+          <span className="dyn-sep">—</span>
+          <span className="dyn-value">{String(value[k]?.value ?? '')}</span>
+          <span className="dyn-reason">{REASONS[value[k]?.reason] || value[k]?.reason}</span>
+        </div>
       ))}
     </div>
   )
