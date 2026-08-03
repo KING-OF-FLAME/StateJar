@@ -37,6 +37,20 @@ class Comparison:
     reinforced: list[str] = dc_field(default_factory=list)
 
 
+# Keys on a stored value that describe how it was said rather than what it
+# says. Two spellings of one measurement differ here and nowhere else, so
+# comparing them would report a contradiction where the user merely repeated
+# themselves in different words.
+_PRESENTATION_KEYS = ("raw", "concept")
+
+
+def _identity(value: Any) -> Any:
+    """The part of a value that decides whether it changed."""
+    if isinstance(value, dict) and any(k in value for k in ("type", "iso", "value")):
+        return {k: v for k, v in value.items() if k not in _PRESENTATION_KEYS}
+    return value
+
+
 def _normalized(path: str, value: Any) -> Any:
     """The value as its field defines it, for comparison only.
 
@@ -46,7 +60,9 @@ def _normalized(path: str, value: Any) -> Any:
     """
     spec = canon.resolve(path)
     if spec is None:
-        return value
+        # a dynamic field: already normalized on write, so only the
+        # presentation keys need stripping
+        return _identity(value)
     try:
         normalized = spec.normalizer(value)
     except (TypeError, ValueError):

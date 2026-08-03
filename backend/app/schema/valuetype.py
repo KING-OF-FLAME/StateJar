@@ -300,6 +300,12 @@ def classify(span: str, *, context: str = "") -> Reading:
     number_match = _NUMBER_IN_SPAN.search(text)
     if not number_match:
         return Reading(TEXT)
+    # A leading zero is never significant in a quantity, so a literal that
+    # keeps one is a designation: "cone 06" is a different firing from
+    # "cone 6", and reading both as 6 merges them.
+    literal = number_match.group(0)
+    if len(literal) > 1 and literal[0] == "0" and not literal.startswith("0."):
+        return Reading(IDENTIFIER)
     number = parse_number(number_match.group(0))
     if number is None:
         return Reading(TEXT)

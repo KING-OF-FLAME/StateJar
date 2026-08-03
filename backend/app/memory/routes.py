@@ -77,12 +77,19 @@ def ingest(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     store = _store(db)
-    extraction = extract(body.text, db=db, user_id=user.id)
+    parent_handle = store.get_latest_handle(user.id, body.session_tag)
+    old_row = store.get_state(parent_handle) if parent_handle else None
+
+    # Extraction sees what this session already knows: a concept it has met
+    # before is reused rather than duplicated, and "push the end date" can
+    # find which slot it means.
+    extraction = extract(
+        body.text, db=db, user_id=user.id,
+        prior_state=old_row["state_json"] if old_row else None,
+    )
     extracted = extraction.state.model_dump()
 
-    parent_handle = store.get_latest_handle(user.id, body.session_tag)
     if parent_handle is not None:
-        old_row = store.get_state(parent_handle)
         new_state, handle = evolve_state(old_row["state_json"], extracted, parent_handle)
         new_state.pop("parent_handle", None)  # lineage lives in the column
     else:

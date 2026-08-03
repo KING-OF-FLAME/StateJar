@@ -215,37 +215,38 @@ def test_a_question_asserts_nothing() -> None:
     assert got == {}, got
 
 
-def test_a_refused_write_leaves_evidence() -> None:
-    """A guard failure is recorded, not swallowed — that is the feedback loop."""
-    state = extract_state(
-        "Update: container load limit is now 26 tonnes."
-    ).model_dump()
-    assert state["unmapped"], "a refused value must be recorded"
-    assert all(
-        entry["reason"] in ("unknown_key", "rejected_value", "low_confidence")
-        for entry in state["unmapped"].values()
-    )
+def test_quarantine_reasons_are_always_guard_failures() -> None:
+    """`_unmapped` means "failed a guard" now, never "unfamiliar".
 
-
-def test_day1_leaves_the_tonnage_message_unextracted() -> None:
-    """Documents the state of play, so the Fix 4 change is visible as a change.
-
-    After the guards, nothing in this message is stored wrongly — but nothing
-    is stored at all either, because no rule claims "container load limit".
-    Opening the extractor (Fix 4) is what turns this into a dynamic field; the
-    guards only stop it becoming a budget in the meantime.
+    An unfamiliar concept became a dynamic field once the extractor was
+    opened, so anything still landing here is a value that is not anything.
     """
+    for text in ("Update: container load limit is now 26 tonnes.",
+                 "Max load per container is 24 tonnes."):
+        state = extract_state(text).model_dump()
+        for entry in state["unmapped"].values():
+            assert entry["reason"] in ("rejected_value", "low_confidence"), text
+
+
+def test_the_tonnage_message_is_now_extracted_as_a_quantity() -> None:
+    """Day 1 stopped this becoming rupees; Fix 4 gives it somewhere to live."""
     state = extract_state("Max load per container is 24 tonnes.").model_dump()
-    assert _flat(state) == {}
     assert "constraints.budget.max" not in _flat(state)
+    assert _flat(state)["dynamic.load_per_container.max"] == 24_000_000
 
 
 # --- regression guards from the previous pass ---------------------------------
 
 
 def test_indian_numbering_still_works() -> None:
-    got = _flat(extract_state("turnover pichle saal 42 lakh tha").model_dump())
+    """The magnitude word still parses. Where it lands is a separate question:
+    turnover is a company's revenue, not a shopping budget, so it keeps its
+    own concept — see test_open_extraction.test_turnover_is_not_a_shopping_budget."""
+    got = _flat(extract_state("my budget is 42 lakh").model_dump())
     assert got["constraints.budget.max"] == 4_200_000
+    turnover = _flat(extract_state("turnover pichle saal 42 lakh tha").model_dump())
+    assert 4_200_000 in turnover.values()
+    assert "constraints.budget.max" not in turnover
 
 
 def test_date_surface_forms_still_equivalent() -> None:

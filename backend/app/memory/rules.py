@@ -158,6 +158,28 @@ _MONEY = re.compile(
 
 _BUDGET_WORD = re.compile(r"\b(?:budget|price|cost|spend|afford|paisa|paise)\b", re.IGNORECASE)
 
+# Money nouns that name a concept of their own. An amount beside one of these
+# belongs to that concept, not to the user's budget — "turnover pichle saal 42
+# lakh" is a company's revenue, and storing it as a shopping ceiling is the
+# misrouting the type guard alone cannot catch, because both are money.
+_OTHER_MONEY_CONCEPT = re.compile(
+    r"\b(?:insured|insurance|premium|turnover|revenue|salary|wage|wages|"
+    r"invoice|rent|deposit|emi|instalment|installment|refund|valuation|"
+    r"payout|claim|fine|penalty|tax|gst|duty|freight|commission)\b",
+    re.IGNORECASE,
+)
+
+
+def names_another_money_concept(clause: str) -> bool:
+    """Whether this clause's money belongs to something other than the budget.
+
+    An explicit budget word wins: "rent budget is 35000" says both, and the
+    one the user actually named is the budget.
+    """
+    if _BUDGET_WORD.search(clause):
+        return False
+    return bool(_OTHER_MONEY_CONCEPT.search(clause))
+
 
 def find_money(clause: str) -> tuple[int, bool] | None:
     """(amount, is_ceiling), or None when nothing money-like is present.
@@ -648,6 +670,197 @@ def find_route(clause: str) -> tuple[str, str] | None:
     return _titlecase(origin), _titlecase(destination)
 
 
+# --- open extraction ----------------------------------------------------------
+#
+# Everything above needs a field to aim at. These patterns do not: they find
+# "<some noun phrase> <some value>" and hand both back as free text, so a
+# container load limit, a firing schedule and a feed conversion ratio are all
+# findable without anyone having declared them first.
+#
+# The caller keeps only values that classify as *measurable* — a quantity, a
+# date, an amount, an identifier. That restriction is what stops "the area is
+# nice and quiet" becoming a stored fact: open extraction over free-text
+# values turns conversation into state, which is the failure mode the whole
+# precision pass was about. Categorical concepts are tier 3's job, where a
+# model can tell an assertion from small talk.
+
+# A comma between digits belongs to the number, exactly as in the clause
+# splitter — excluding it outright truncated "4,200 birds" to "4". A
+# coordinating word ends the value, so "MY NAME IS SANJANA AND MY BUDGET IS
+# 5000" does not make the name the rest of the sentence.
+_OPEN_VALUE = r"(?:(?<=\d),(?=\d)|(?!\s+(?:and|aur|but)\s+)[^,;!?\n]){1,60}"
+_OPEN_CONCEPT = r"[A-Za-z][A-Za-z0-9 _/-]{2,44}?"
+
+_OPEN_PATTERNS = (
+    # "container load limit is now 26 tonnes", "shipment weighs 1,240 kg"
+    re.compile(
+        rf"\b(?P<key>{_OPEN_CONCEPT})\s+"
+        r"(?:is|are|was|were|weighs|weighed|measures|holds|takes|costs|"
+        r"totals|equals|comes\s+to|runs|sits\s+at|stands\s+at)\s+"
+        r"(?:now|currently|about|around|approximately|roughly|at)?\s*"
+        rf"(?P<val>{_OPEN_VALUE})",
+        re.IGNORECASE),
+    # "insured for $8,500", "hold at 20 minutes", "bisque at cone 06"
+    re.compile(
+        rf"\b(?P<key>{_OPEN_CONCEPT})\s+(?:for|at|of|to)\s+(?P<val>{_OPEN_VALUE})",
+        re.IGNORECASE),
+    # "transit time 11 days", "hold 20 minutes at peak" — a short label
+    # followed by a measurement. The value must carry a unit, which is what
+    # keeps this from matching any two adjacent tokens.
+    re.compile(
+        r"\b(?P<key>[A-Za-z][A-Za-z _/-]{2,28}?)\s+"
+        r"(?P<val>[₹$€£]?\s*\d[\d,.]*\s*[A-Za-z%]{1,14})\b",
+        re.IGNORECASE),
+)
+
+# A concept phrase that is really a question or a pronoun is not a concept.
+_NOT_A_CONCEPT = re.compile(
+    r"^(?:what|which|who|when|where|why|how|can|could|would|should|do|does|"
+    r"did|is|are|was|were|the|a|an|it|this|that|there|here|i|we|you|they|"
+    r"and|or|but|so|then|now|next|"
+    # Discourse labels, and the verbs the qualified-date and update rules
+    # already own. "Update:" names no concept, and "ends 19 September" is the
+    # end of something else — reading either as a concept of its own is how
+    # `dynamic.update` and `dynamic.ends` appeared beside the real fields.
+    r"update|updates|correction|note|notes|fyi|also|actually|btw|ps|"
+    r"starts?|starting|begins?|beginning|ends?|ending|finishes?|closes?|"
+    r"push|move|change|changes|set|shift|bump|revise|ignore|forget|drop)\b",
+    re.IGNORECASE,
+)
+
+
+def is_a_concept(name: str) -> bool:
+    """Whether a captured phrase can name a concept at all.
+
+    Exported because the same judgement is needed wherever a free-text key
+    becomes a dynamic field — otherwise "Update: ..." creates a concept called
+    "update" through the labelled-form rule while the open patterns correctly
+    refuse it.
+    """
+    name = re.sub(r"^(?:the|a|an|my|our|your)\s+", "", (name or "").strip(),
+                  flags=re.IGNORECASE).strip()
+    return bool(name) and not _NOT_A_CONCEPT.match(name)
+
+
+def find_open_facts(clause: str) -> list[tuple[str, str]]:
+    """(concept, value) pairs, with no notion of which fields exist.
+
+    Deliberately says nothing about whether the concept is known — that is the
+    router's decision, and an unfamiliar one becomes a dynamic field rather
+    than being dropped.
+    """
+    found: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    claimed: set[str] = set()
+    for pattern in _OPEN_PATTERNS:
+        for m in pattern.finditer(clause):
+            concept = " ".join((m.group("key") or "").split()).strip(" .,;:-")
+            value = " ".join((m.group("val") or "").split()).strip(" .,;:-")
+            if not concept or not value:
+                continue
+            if _NOT_A_CONCEPT.match(concept):
+                # strip a leading article and retry: "the container load limit"
+                concept = re.sub(r"^(?:the|a|an|my|our|your)\s+", "", concept,
+                                 flags=re.IGNORECASE).strip()
+                if not concept or _NOT_A_CONCEPT.match(concept):
+                    continue
+            key = concept.lower()
+            # One value, one concept. The patterns overlap by design (the verb
+            # form is the precise one, the juxtaposition the fallback), so
+            # without this "shipment weighs 1,240 kg" yields both "shipment"
+            # and "shipment weighs" for the same measurement. Containment, not
+            # equality: a looser pattern often captures a *prefix* of the same
+            # value — "3rd Nov" and "3rd" are one date read twice.
+            lowered = value.lower()
+            if key in seen or any(
+                lowered in c or c in lowered for c in claimed
+            ):
+                continue
+            seen.add(key)
+            claimed.add(lowered)
+            found.append((concept, value))
+    return found
+
+
+# --- qualifiers, updates, retractions -----------------------------------------
+
+# "Booking starts 12 September" is not a deadline. Storing it as one is what
+# let a later "push the end date" overwrite the *start* and destroy it — the
+# unqualified `deadline` field has no way to tell the two apart, so a
+# qualified date must never land there.
+_QUALIFIED_DATE = re.compile(
+    r"(?:\b(?P<key>[A-Za-z][A-Za-z ]{0,28}?)\s+)?"
+    r"\b(?P<q>starts?|starting|begins?|beginning|opens?|"
+    r"ends?|ending|finishes?|finishing|closes?|closing)\s+"
+    r"(?:on\s+|at\s+|from\s+)?(?P<val>[^,;.!?\n]{3,40})",
+    re.IGNORECASE,
+)
+_START_WORDS = ("start", "begin", "open")
+
+# "Push the end date to 22 September" — an update that names which end it means.
+_QUALIFIER_UPDATE = re.compile(
+    r"\b(?:push|move|change|set|update|shift|make|bump|revise)\s+"
+    r"(?:the\s+|my\s+|our\s+)?"
+    r"(?P<q>start|end|min|minimum|max|maximum|first|last|final|target)\s*"
+    r"(?:date|time|day|value|figure|amount|limit|number)?\s+"
+    r"(?:to|=|as|into)\s+(?P<val>[^,;.!?\n]{1,40})",
+    re.IGNORECASE,
+)
+
+# "Actually ignore the insurance figure" / "we're not insuring this one"
+_RETRACTION = re.compile(
+    r"\b(?:ignore|forget|disregard|drop|remove|scratch|cancel|delete|"
+    r"never\s+mind|nevermind|strike)\s+"
+    r"(?:the\s+|that\s+|my\s+|our\s+|any\s+)?"
+    r"(?P<key>[A-Za-z][A-Za-z ]{2,38}?)"
+    r"(?:\s+(?:figure|value|number|field|entry|detail|bit|part|one))?"
+    r"(?=\s*[,;.!?]|\s*$|\s+(?:we|i|for|from|on|please))",
+    re.IGNORECASE,
+)
+_NEGATION = re.compile(
+    r"\b(?:we(?:'re| are)|i(?:'m| am)|it(?:'s| is))\s+not\s+"
+    r"(?P<key>[A-Za-z][A-Za-z ]{2,38}?)(?=\s*[,;.!?]|\s*$|\s+(?:this|that|it))",
+    re.IGNORECASE,
+)
+
+
+def find_qualified_dates(clause: str) -> list[tuple[str, str, str]]:
+    """(concept, qualifier, raw_date) for dates that name which end they are."""
+    out: list[tuple[str, str, str]] = []
+    for m in _QUALIFIED_DATE.finditer(clause):
+        verb = m.group("q").lower()
+        qualifier = "start" if verb.startswith(_START_WORDS) else "end"
+        value = " ".join((m.group("val") or "").split()).strip(" .,;:")
+        if not value:
+            continue
+        concept = " ".join((m.group("key") or "").split()).strip(" .,;:")
+        out.append((concept, qualifier, value))
+    return out
+
+
+def find_qualifier_updates(clause: str) -> list[tuple[str, str]]:
+    """(qualifier, raw_value) for an update that names the end it targets."""
+    out: list[tuple[str, str]] = []
+    for m in _QUALIFIER_UPDATE.finditer(clause):
+        value = " ".join((m.group("val") or "").split()).strip(" .,;:")
+        if value:
+            out.append((m.group("q").lower(), value))
+    return out
+
+
+def find_retractions(clause: str) -> list[str]:
+    """Concept names the message withdraws rather than asserts."""
+    out: list[str] = []
+    for pattern in (_RETRACTION, _NEGATION):
+        for m in pattern.finditer(clause):
+            concept = " ".join((m.group("key") or "").split()).strip(" .,;:")
+            concept = re.sub(r"^(?:the|a|an|my|our|that|this)\s+", "", concept,
+                             flags=re.IGNORECASE).strip()
+            if concept and concept.lower() not in NAME_STOPWORDS:
+                out.append(concept)
+    return out
+
+
 def prune_subsumed(items: list[str]) -> list[str]:
     """Drop entries that merely contain a shorter entry.
 
@@ -800,5 +1013,9 @@ __all__ = [
     "find_city", "find_contact", "find_dates", "find_money", "find_name",
     "find_unresolved", "find_build_spec", "slugify", "split_clauses",
     "valid_capture", "prune_subsumed", "find_assignments", "find_alias_assignments", "build_alias_matcher", "find_route",
+    "find_open_facts", "find_qualified_dates", "find_qualifier_updates",
+    "is_a_concept",
+    "find_retractions", "find_order_quantity", "find_employer", "find_payment",
+    "names_another_money_concept",
     "_DECISION", "_DECISION_HI", "_GOAL", "_REQUIREMENT",
 ]

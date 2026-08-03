@@ -344,7 +344,7 @@ def test_llm_tier_fills_gaps_and_is_labelled(monkeypatch: pytest.MonkeyPatch) ->
                 "someone in our team over in that city we mentioned")
     monkeypatch.setattr(
         extractor, "merge_llm",
-        lambda text, state, origins, db=None, user_id=None: (
+        lambda text, state, origins, db=None, user_id=None, prior=None: (
             state.facts.__setitem__("city", "Chennai"),
             origins.__setitem__("facts.city", SOURCE_LLM),
             True,

@@ -523,11 +523,15 @@ def quarantine(state: dict[str, Any], raw_key: str, raw_value: Any, reason: str)
 
 # --- the STORE-boundary invariant ---------------------------------------------
 
-# sections whose contents are canonical fields; the rest are audit artifacts
-ACTIVE_SECTIONS = ("facts", "preferences", "decisions", "constraints", "goals")
+# Sections whose contents are live fields; the rest are audit artifacts.
+# `dynamic` holds concepts no registry entry claims — first-class state, so
+# it is versioned, retrievable, hashed, and bound by the same invariant.
+ACTIVE_SECTIONS = ("facts", "preferences", "decisions", "constraints", "goals",
+                   "dynamic")
 
 # leaves that belong to a canonical path rather than being one themselves
-_STRUCTURED_LEAVES = {"value", "currency", "iso", "raw", "ambiguous", "year_inferred"}
+_STRUCTURED_LEAVES = {"value", "currency", "iso", "raw", "ambiguous",
+                      "year_inferred", "unit", "concept"}
 
 
 def leaf_paths_in(block: Any, section: str) -> Iterable[str]:

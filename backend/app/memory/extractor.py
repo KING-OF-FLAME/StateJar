@@ -36,6 +36,8 @@ from pydantic import BaseModel, Field
 from app.config import get_settings
 from app.memory import rules
 from app.schema import canonical as canon
+from app.schema import dynamic as dyn
+from app.schema import valuetype as vt
 
 logger = logging.getLogger(__name__)
 
@@ -72,8 +74,13 @@ class StructuredState(BaseModel):
     decisions: dict[str, Any] = Field(default_factory=dict)
     constraints: dict[str, Any] = Field(default_factory=dict)
     goals: dict[str, Any] = Field(default_factory=dict)
+    # concepts no registry field claims — real state, not quarantine
+    dynamic: dict[str, Any] = Field(default_factory=dict)
     unresolved: list[UnresolvedField] = Field(default_factory=list)
     conflicts: list[dict[str, Any]] = Field(default_factory=list)
+    # Concepts this message withdraws. Carried rather than applied, because
+    # the state a retraction removes from only exists at merge time.
+    retractions: list[dict[str, Any]] = Field(default_factory=list)
     # quarantine: keys no canonical path claims. Kept so the registry can be
     # grown from what real users actually said, never merged into active state.
     unmapped: dict[str, Any] = Field(default_factory=dict)
@@ -88,7 +95,7 @@ class Extraction:
     origins: dict[str, str] = dc_field(default_factory=dict)
 
 
-_SECTIONS = ("facts", "preferences", "decisions", "constraints", "goals")
+_SECTIONS = canon.ACTIVE_SECTIONS
 
 
 def _section(state: StructuredState, name: str) -> dict[str, Any]:
@@ -145,6 +152,188 @@ def _put(
                      canonical_value)
     origins[path] = source
     return True
+
+
+def put_fact(
+    state: StructuredState, origins: dict[str, str], fact: dyn.Fact,
+    *, context: str = "",
+) -> bool:
+    """Route one extracted fact and write it. The door for open extraction.
+
+    A fact that maps cleanly onto a registry field goes there; anything else
+    becomes a dynamic field under its own concept. Neither branch can write a
+    value its type refuses, and neither can overwrite an occupied path — the
+    first tier to speak still wins.
+    """
+    routed = dyn.route(fact, context=context)
+    if routed.where == dyn.ROUTE_REFUSED:
+        # quarantine only when the value is not anything at all; a real value
+        # aimed at the wrong field became a dynamic field instead
+        if fact.polarity == dyn.POLARITY_ASSERT:
+            concept, qualifier = dyn.split_qualifier(fact.concept)
+            state.unmapped[dyn.path_for(concept or fact.concept, qualifier)] = {
+                "value": fact.value, "reason": routed.reason or "rejected_value",
+                "source": fact.source,
+            }
+        return False
+
+    section, _, leaf = routed.path.partition(".")
+    if canon.read_path(_section(state, section), leaf) is not None:
+        return False
+    canon.write_path(_section(state, section), leaf, routed.value)
+    origins[routed.path] = fact.source
+    return True
+
+
+# Kinds the rule tier is allowed to open-extract. A measurable value carries
+# its own evidence that an assertion was made; a free-text one does not, and
+# accepting those turns "the area is nice and quiet" into a stored fact.
+# Categorical concepts are tier 3's job — a model can tell an assertion from
+# small talk, a regex cannot.
+# Value kinds tier 3 may declare. Anything else is re-classified from the
+# value itself rather than trusted, because a wrong type label routes a
+# fact to the wrong normalizer and loses it.
+_LLM_VALUE_TYPES = frozenset({
+    vt.MONEY, vt.QUANTITY, vt.DURATION, vt.DATE, vt.PERCENT, vt.RATIO,
+    vt.IDENTIFIER, vt.COUNT, vt.TEXT,
+})
+
+_MEASURABLE = frozenset({
+    vt.MONEY, vt.QUANTITY, vt.DURATION, vt.DATE, vt.PERCENT, vt.RATIO,
+    vt.IDENTIFIER, vt.COUNT,
+})
+
+
+def _open_fact(
+    state: StructuredState, origins: dict[str, str], concept: str,
+    raw_value: str, clause: str, *, measurable_only: bool = True,
+    prior: dict[str, Any] | None = None, qualifier: str | None = None,
+    source: str = SOURCE_RULES, confidence: float = 1.0,
+    value_type: str | None = None,
+) -> bool:
+    """One open-extracted concept, reconciled against the session and stored."""
+    if not rules.is_a_concept(concept):
+        return False
+    reading = vt.classify(raw_value, context=clause)
+    kind = value_type or reading.kind
+    if measurable_only and kind not in _MEASURABLE:
+        return False
+    known, by_qualifier = _concept_context(state, prior)
+    base, embedded = dyn.split_qualifier(concept)
+    qualifier = dyn.normalize_qualifier(qualifier) or embedded
+    resolved = dyn.reconcile_concept(base or concept, known, qualifier, by_qualifier)
+    return put_fact(state, origins, dyn.Fact(
+        concept=resolved, value=raw_value, value_type=kind,
+        qualifier=qualifier, confidence=confidence, source=source,
+        unit=reading.unit,
+    ), context=clause)
+
+
+def _qualified_date(
+    state: StructuredState, origins: dict[str, str], prior: dict[str, Any],
+    concept: str, qualifier: str, raw_date: str, clause: str,
+) -> bool:
+    """A date that names which end it is. Never `constraints.deadline`."""
+    if not rules.find_dates(raw_date):
+        return False
+    known, by_qualifier = _concept_context(state, prior)
+    if not concept:
+        # "ends 19 September" names no subject — it belongs to whichever
+        # concept is already under discussion, and only when exactly one is
+        owners = by_qualifier.get(qualifier) or []
+        if len(owners) == 1:
+            concept = owners[0]
+        elif len(known) == 1:
+            concept = known[0]
+        else:
+            return False
+    return _open_fact(state, origins, concept, raw_date, clause,
+                      measurable_only=False, prior=prior, qualifier=qualifier,
+                      value_type=vt.DATE)
+
+
+def _qualified_update(
+    state: StructuredState, origins: dict[str, str], prior: dict[str, Any],
+    qualifier: str, raw_value: str, clause: str,
+) -> bool:
+    """"Push the end date to 22 September" — target the slot with that end.
+
+    If nothing carries the qualifier yet, a new entry is created. It must
+    never fall back to the nearest field: that is what let an end date
+    overwrite a start date and destroy it.
+    """
+    qualifier = dyn.normalize_qualifier(qualifier) or qualifier
+    known, by_qualifier = _concept_context(state, prior)
+    owners = by_qualifier.get(qualifier) or []
+    concept = owners[0] if len(owners) == 1 else (known[0] if len(known) == 1 else "")
+    if not concept:
+        return False
+    return _open_fact(state, origins, concept, raw_value, clause,
+                      measurable_only=False, prior=prior, qualifier=qualifier)
+
+
+def _record_retraction(
+    state: StructuredState, prior: dict[str, Any], concept: str
+) -> None:
+    """Note that a concept was withdrawn. The removal happens at merge time,
+    where the state it applies to actually exists."""
+    known, _ = _concept_context(state, prior)
+    resolved = dyn.reconcile_concept(concept, known)
+    entry = {"concept": resolved, "raw": concept}
+    if entry not in state.retractions:
+        state.retractions.append(entry)
+
+
+def _concept_context(
+    state: StructuredState, prior: dict[str, Any] | None = None
+) -> tuple[list[str], dict[str, list[str]]]:
+    """Concepts known to this session — the new extraction plus what came before."""
+    merged: dict[str, Any] = dict((prior or {}).get(dyn.SECTION) or {})
+    merged.update(state.dynamic)
+    scope = {dyn.SECTION: merged}
+    return dyn.known_concepts(scope), dyn.qualifier_index(scope)
+
+
+def _registry_values(state: StructuredState) -> set[str]:
+    """Every value already stored in a named field, for de-duplication.
+
+    Open extraction runs over the same clause the named rules just read, so
+    without this "my budget is 5000" lands twice — once as
+    `constraints.budget.max` and again as `dynamic.my_budget`. One concept,
+    one path is the invariant; two spellings of the same write break it.
+    """
+    seen: set[str] = set()
+    dumped = state.model_dump()
+    for section in canon.ACTIVE_SECTIONS:
+        if section == dyn.SECTION:
+            continue
+        for path in canon.leaf_paths_in(dumped.get(section), section):
+            value = canon.read_path(dumped, path)
+            if isinstance(value, dict):
+                value = value.get("value", value.get("iso"))
+            if value is not None:
+                seen.add(str(value))
+    return seen
+
+
+def _open_extract(
+    state: StructuredState, origins: dict[str, str], clause: str,
+    prior: dict[str, Any] | None = None, claimed: set[str] | None = None,
+) -> None:
+    """Rule-tier open extraction, restricted to measurable values."""
+    already = _registry_values(state)
+    for concept, raw_value in rules.find_open_facts(clause):
+        if claimed and raw_value.lower() in claimed:
+            continue
+        reading = vt.classify(raw_value, context=clause)
+        if reading.number is not None and _matches(reading, already):
+            continue          # a named field already holds this measurement
+        _open_fact(state, origins, concept, raw_value, clause, prior=prior)
+
+
+def _matches(reading: vt.Reading, values: set[str]) -> bool:
+    number = reading.number
+    return str(number) in values or str(int(number)) in values
 
 
 def _quarantine(
@@ -222,12 +411,27 @@ def field_count(state: StructuredState) -> int:
 # --- tier 1: rules ------------------------------------------------------------
 
 
-def extract_rules(text: str) -> tuple[StructuredState, dict[str, str]]:
-    """Deterministic pass. Every pattern runs on every clause."""
+def extract_rules(
+    text: str, prior_state: dict[str, Any] | None = None
+) -> tuple[StructuredState, dict[str, str]]:
+    """Deterministic pass. Every pattern runs on every clause.
+
+    `prior_state` is what this session already knows. Extraction needs it for
+    two things it cannot do statelessly: reuse a concept name it has seen
+    before, and work out which slot "push the end date" refers to.
+    """
     state = StructuredState()
     origins: dict[str, str] = {}
     seen_dates: list[str] = []
+    claimed_dates: set[str] = set()
+    # values a qualified rule already placed; open extraction must not
+    # store the same measurement a second time under a looser name
+    claimed_values: set[str] = set()
+    # clauses a qualified rule fully accounted for; reading one again with
+    # a looser pattern only ever produces a second name for one fact
+    handled_clauses: set[str] = set()
     rejected_modes: list[str] = []
+    prior = prior_state or {}
 
     # Build-spec values are sentence-scoped and their own patterns already
     # stop at a clause end, so they run once over the whole utterance. Per
@@ -251,14 +455,20 @@ def extract_rules(text: str) -> tuple[StructuredState, dict[str, str]]:
         elif city := rules.find_city(clause):
             _put(state, origins, SOURCE_RULES, "facts", "city", city, context=clause)
 
-        if money := rules.find_money(clause):
-            amount, _is_ceiling = money
-            # One budget concept, one path. The old code kept `budget_inr` and
-            # `budget_inr_max` apart to preserve "exactly N" vs "at most N" —
-            # but a later update only ever patched one of them, leaving the
-            # other live and stale. The distinction was not worth a second
-            # source of truth for the same number.
-            _put(state, origins, SOURCE_RULES, "constraints", "budget.max", amount)
+        # An amount only becomes the *budget* when nothing else in the clause
+        # claims it. "insured for $8,500" and "turnover 42 lakh" are money, but
+        # they are not what the user will spend — routing every amount to
+        # `budget.max` is why a shipment's insured value came back as a
+        # shopping budget. A named money concept keeps its own dynamic field.
+        if not rules.names_another_money_concept(clause):
+            if money := rules.find_money(clause):
+                amount, _is_ceiling = money
+                # One budget concept, one path. The old code kept `budget_inr`
+                # and `budget_inr_max` apart to preserve "exactly N" vs "at
+                # most N" — but a later update only ever patched one of them,
+                # leaving the other live and stale.
+                _put(state, origins, SOURCE_RULES, "constraints", "budget.max",
+                     amount)
 
         mode, rejected = rules.find_contact(clause)
         for r in rejected:
@@ -268,8 +478,18 @@ def extract_rules(text: str) -> tuple[StructuredState, dict[str, str]]:
             _put(state, origins, SOURCE_RULES, "preferences", "contact_mode", mode,
                  context=clause)
 
+        # A date that names which end it is belongs to that end, never to the
+        # unqualified `deadline`. Storing a start date there is what let a
+        # later "push the end date" overwrite it.
+        for concept, qualifier, raw_date in rules.find_qualified_dates(clause):
+            if _qualified_date(state, origins, prior, concept, qualifier,
+                               raw_date, clause):
+                claimed_dates.update(rules.find_dates(raw_date))
+                claimed_values.add(raw_date.lower())
+                handled_clauses.add(clause)
+
         for value in rules.find_dates(clause):
-            if value not in seen_dates:
+            if value not in seen_dates and value not in claimed_dates:
                 seen_dates.append(value)
 
         if decision := rules.find_decision(clause):
@@ -315,11 +535,35 @@ def extract_rules(text: str) -> tuple[StructuredState, dict[str, str]]:
                  context=clause)
 
         for raw_key, raw_value in rules.find_assignments(clause):
-            if raw_key:
+            if not raw_key:
+                _put_enum_guess(state, origins, raw_value)
+            elif canon.resolve(raw_key) is not None:
                 _put(state, origins, SOURCE_RULES, _section_for(raw_key), raw_key,
                      raw_value, context=clause)
             else:
-                _put_enum_guess(state, origins, raw_value)
+                # An unfamiliar key is a concept, not a quarantine entry. This
+                # is the line that used to fill `_unmapped` with things the
+                # user plainly stated — `facts.kiln_firing_schedule` and the
+                # like — and then never showed them again.
+                _open_fact(state, origins, raw_key.replace("_", " "), raw_value,
+                           clause)
+
+        # An update that names a qualifier targets the slot carrying it.
+        for qualifier, raw_value in rules.find_qualifier_updates(clause):
+            if _qualified_update(state, origins, prior, qualifier, raw_value,
+                                 clause):
+                claimed_values.add(raw_value.lower())
+                handled_clauses.add(clause)
+
+        for concept in rules.find_retractions(clause):
+            _record_retraction(state, prior, concept)
+
+        # Open extraction, last: anything the named rules did not claim. A
+        # concept nobody declared becomes a dynamic field rather than being
+        # dropped, which is what lets a load limit or a firing schedule be
+        # remembered at all.
+        if clause not in handled_clauses:
+            _open_extract(state, origins, clause, prior, claimed_values)
 
         for field_name, reason in rules.find_unresolved(clause):
             if not any(u.field == field_name for u in state.unresolved):
@@ -468,48 +712,92 @@ def merge_gliner(
 
 # --- tier 3: LLM structured extraction ----------------------------------------
 
-def _llm_field_menu() -> str:
-    """The schema, rendered from the registry rather than written out here.
+def _llm_prompt(known_concepts: list[str] | None = None) -> str:
+    """The open-extraction contract. No list of allowed fields.
 
-    A hand-maintained prompt is a second source of truth that silently drifts:
-    the previous one still asked for `budget_inr` and `budget_inr_max` long
-    after those paths stopped existing, so anything tier 3 returned for a
-    budget was rejected on arrival. Generating it means the model is asked for
-    exactly what the registry can store, always.
+    The previous prompt handed the model the registry's fixed field list and
+    asked it to fill it in, so a message about kiln firing came back as 35
+    fields marked "Not provided" and everything the message actually said —
+    cone 06, cone 6, twenty minutes — was discarded. The plumbing was never
+    the problem; the schema handed to it was closed.
+
+    `known_concepts` is Fix 5, and it is why this stays deterministic: reuse
+    is decided here, with the whole sentence in view, instead of trying to
+    reconcile two key strings afterwards.
     """
-    lines = []
-    for spec in canon.REGISTRY:
-        if spec.enum_values:
-            shape = " | ".join(spec.enum_values)
-        elif spec.type == "money":
-            shape = 'amount as written, e.g. "75000" or "75k"'
-        elif spec.type == "date":
-            shape = 'date as written, e.g. "15 Aug" or "next Friday"'
-        elif spec.type == "list":
-            shape = "array of strings"
-        elif spec.type == "int":
-            shape = "integer"
-        else:
-            shape = "string"
-        hint = f"   # {spec.description}" if spec.description else ""
-        lines.append(f'  "{spec.path}": {shape}{hint}')
-    return "\n".join(lines)
+    reuse = ""
+    if known_concepts:
+        listed = "\n".join(f"  - {c}" for c in sorted(known_concepts)[:40])
+        reuse = (
+            "\nConcepts already recorded in this session:\n" + listed + "\n"
+            "If a fact refers to one of these, reuse that EXACT concept name. "
+            "Only introduce a new name for a genuinely new concept.\n"
+        )
 
-
-def _llm_prompt() -> str:
     return (
-        "You extract structured facts from a user message. Reply with STRICT "
-        "JSON only - no prose, no markdown fence.\n\n"
-        "Return a FLAT object whose keys are chosen from exactly this list. "
-        "Omit every key the message does not state:\n\n"
-        "{\n" + _llm_field_menu() + "\n}\n\n"
-        "Rules:\n"
+        "You extract facts from a user message. Reply with STRICT JSON only - "
+        "no prose, no markdown fence.\n\n"
+        'Return {"facts": [ ... ]} with one object per fact found:\n'
+        "{\n"
+        '  "concept":    "container load limit",   // free text, lowercase noun '
+        "phrase. There is NO list of allowed concepts.\n"
+        '  "qualifier":  "max",                    // one of: '
+        + ", ".join(dyn.QUALIFIERS) + ", or null\n"
+        '  "value":      "26 tonnes",              // exactly as written in the '
+        "message\n"
+        '  "value_type": "quantity",               // one of: '
+        + ", ".join(sorted(_LLM_VALUE_TYPES)) + "\n"
+        '  "polarity":   "assert",                 // assert | negate | retract\n'
+        '  "confidence": 0.0,                      // 0..1\n'
+        '  "span":       [start, end]              // character offsets\n'
+        "}\n"
+        + reuse +
+        "\nRules:\n"
+        "- Extract everything the message states, not only things you expect.\n"
         "- Never invent a value that is not in the message.\n"
-        "- Copy values as the user wrote them; do not reformat dates or money.\n"
-        "- Omit a key rather than guess.\n"
-        '- Use {"unresolved":[{"field":"...","reason":"..."}]} for something '
-        "the user asked about but did not supply."
+        "- Copy values verbatim; do not convert units, dates or amounts.\n"
+        "- Use polarity 'retract' when the user withdraws something they said "
+        "before, and 'negate' for an explicit denial.\n"
+        "- A question asserts nothing. Return an empty list for one.\n"
+        "- Do NOT report fields as missing. Absence is not a fact."
     )
+
+
+def _parse_facts(payload: dict[str, Any]) -> list[dyn.Fact]:
+    """The open contract's reply to Facts. Anything malformed is dropped."""
+    raw = payload.get("facts")
+    if not isinstance(raw, list):
+        # a model that answered with the object alone rather than a list
+        raw = [payload] if payload.get("concept") else []
+
+    facts: list[dyn.Fact] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        concept = str(item.get("concept") or "").strip()
+        value = item.get("value")
+        if not concept or value in (None, "", [], {}):
+            continue
+        value_type = str(item.get("value_type") or "").strip().lower()
+        if value_type not in _LLM_VALUE_TYPES:
+            # trust the value over the label: a wrong type would route the
+            # fact to the wrong normalizer and lose it
+            value_type = vt.classify(str(value)).kind
+        polarity = str(item.get("polarity") or dyn.POLARITY_ASSERT).lower()
+        if polarity not in dyn.POLARITIES:
+            polarity = dyn.POLARITY_ASSERT
+        try:
+            confidence = float(item.get("confidence", canon.CONFIDENCE[SOURCE_LLM]))
+        except (TypeError, ValueError):
+            confidence = canon.CONFIDENCE[SOURCE_LLM]
+
+        facts.append(dyn.Fact(
+            concept=concept, value=value, value_type=value_type,
+            qualifier=dyn.normalize_qualifier(item.get("qualifier")),
+            polarity=polarity, confidence=max(0.0, min(confidence, 1.0)),
+            source=SOURCE_LLM,
+        ))
+    return facts
 
 
 def _llm_should_run(text: str, state: StructuredState) -> bool:
@@ -535,17 +823,25 @@ def _llm_should_run(text: str, state: StructuredState) -> bool:
 def merge_llm(
     text: str, state: StructuredState, origins: dict[str, str],
     db: Any = None, user_id: int | None = None,
+    prior: dict[str, Any] | None = None,
 ) -> bool:
-    """Last resort for messy input. Never raises, never retries."""
+    """Open extraction. Never raises, never retries.
+
+    The reply is a list of facts, not a filled-in form, so this tier can
+    return a concept nobody declared. Routing still runs every one of them
+    through the same guards the rule tier uses — a hallucinated concept with
+    an impossible value is refused exactly as a regex's would be.
+    """
     if db is None or user_id is None:
         return False
+    known, by_qualifier = _concept_context(state, prior)
     try:
         from app.llm.gateway import chat as gateway_chat
 
         result = gateway_chat(
             db, user_id,
             model=get_settings().extractor_llm_model,
-            system_context=_llm_prompt(),
+            system_context=_llm_prompt(known),
             user_message=text,
         )
         payload = _parse_json(result.get("text") or result.get("content") or "")
@@ -556,33 +852,28 @@ def merge_llm(
         return False
 
     landed = False
-    # The prompt asks for a flat, path-keyed object, but a model will
-    # sometimes nest it anyway. Both shapes are accepted and flattened to the
-    # same pairs — no key reaches state without `_put` resolving it against
-    # the registry first, so a hallucinated field name cannot become a fact.
-    for raw_key, value in _flatten_llm(payload).items():
-        if value in (None, "", [], {}):
-            continue
-        spec = canon.resolve(raw_key)
-        if spec is None:
-            _quarantine(state, raw_key, value, SOURCE_LLM)
-            continue
-        if spec.path in ("facts.name", "facts.city") and \
-                str(value).strip().lower() in rules.NAME_STOPWORDS:
-            continue
-        landed |= _put(state, origins, SOURCE_LLM, spec.section,
-                       spec.path.split(".", 1)[1], value)
-
-    for item in payload.get("unresolved") or []:
-        if not isinstance(item, dict):
-            continue
-        slug = rules.slugify(str(item.get("field", "")))
-        if slug and not any(u.field == slug for u in state.unresolved):
-            state.unresolved.append(
-                UnresolvedField(field=slug, reason=str(item.get("reason") or "not provided"))
-            )
-            origins[f"unresolved.{slug}"] = SOURCE_LLM
+    for fact in _parse_facts(payload):
+        if fact.polarity != dyn.POLARITY_ASSERT:
+            _record_retraction(state, prior or {}, fact.concept)
             landed = True
+            continue
+        if dyn.slugify_concept(fact.concept) in ("name", "city") and \
+                str(fact.value).strip().lower() in rules.NAME_STOPWORDS:
+            continue
+        base, embedded = dyn.split_qualifier(fact.concept)
+        resolved = dyn.reconcile_concept(
+            base or fact.concept, known, fact.qualifier or embedded, by_qualifier
+        )
+        landed |= put_fact(
+            state, origins,
+            dyn.Fact(concept=resolved, value=fact.value,
+                     value_type=fact.value_type,
+                     qualifier=fact.qualifier or embedded,
+                     polarity=fact.polarity, confidence=fact.confidence,
+                     source=SOURCE_LLM),
+            context=text,
+        )
+        known, by_qualifier = _concept_context(state, prior)
     return landed
 
 
@@ -628,15 +919,20 @@ def _parse_json(text: str) -> dict[str, Any] | None:
 # --- public API ---------------------------------------------------------------
 
 
-def extract(text: str, db: Any = None, user_id: int | None = None) -> Extraction:
+def extract(
+    text: str, db: Any = None, user_id: int | None = None,
+    prior_state: dict[str, Any] | None = None,
+) -> Extraction:
     """Run the tiers in order and report which ones contributed."""
-    state, origins = extract_rules(text)
+    state, origins = extract_rules(text, prior_state)
     sources = [SOURCE_RULES]
 
     if _gliner_enabled() and merge_gliner(text, state, origins):
         sources.append(SOURCE_GLINER)
 
-    if _llm_should_run(text, state) and merge_llm(text, state, origins, db, user_id):
+    if _llm_should_run(text, state) and merge_llm(
+        text, state, origins, db, user_id, prior_state
+    ):
         sources.append(SOURCE_LLM)
 
     return Extraction(state=state, sources=sources, origins=origins)

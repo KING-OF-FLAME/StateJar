@@ -18,6 +18,7 @@ from app.config import get_settings
 from app.memory.extractor import extract_state
 from app.memory.versioning import initial_state
 from app.schema import canonical as canon
+from app.schema import dynamic as dyn
 from tests.golden.corpus import GOLDEN
 
 
@@ -83,11 +84,19 @@ def test_golden_case_is_deterministic(
     assert first == second, name
 
 
-def test_nothing_outside_the_registry_reaches_state() -> None:
-    """Every live path in every golden case must be a registered field."""
+def test_every_live_path_is_registered_or_dynamic() -> None:
+    """A live path is either a declared field or an explicit dynamic concept.
+
+    It used to have to be a registry field, which is exactly why anything
+    unfamiliar was dropped. The rule now is narrower and more useful: nothing
+    lands in a *named* section that the registry does not know, and everything
+    else is under `dynamic.` where its origin is visible.
+    """
     for name, text, _must, _must_not in GOLDEN:
         state = extract_state(text).model_dump()
         for path in _flat(state):
+            if path.startswith(f"{dyn.SECTION}."):
+                continue
             assert canon.resolve(path) is not None, f"{name}: {path} is unregistered"
 
 

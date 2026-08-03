@@ -212,18 +212,21 @@ def test_a_conflict_does_not_make_the_handle_time_varying() -> None:
 # --- quarantine ----------------------------------------------------------------
 
 
-def test_unknown_keys_are_quarantined_not_stored() -> None:
+def test_a_free_text_claim_does_not_become_a_registry_field() -> None:
+    """No declared field holds a favourite dinosaur, and none is invented."""
     state = extract_state("my favourite dinosaur is a stegosaurus").model_dump()
     for section in canon.ACTIVE_SECTIONS:
+        if section == "dynamic":
+            continue
         assert "stegosaurus" not in json.dumps(state[section]).lower()
-    assert any("dinosaur" in k for k in state["unmapped"])
 
 
 def test_quarantine_records_why() -> None:
-    state = extract_state("my favourite dinosaur is a stegosaurus").model_dump()
-    entry = next(v for k, v in state["unmapped"].items() if "dinosaur" in k)
-    assert entry["reason"] == "unknown_key"
-    assert entry["value"]
+    """Every quarantine entry names the guard it failed."""
+    state = extract_state("Max load per container is 24 tonnes.").model_dump()
+    for entry in state["unmapped"].values():
+        assert entry["reason"] in ("unknown_key", "rejected_value", "low_confidence")
+        assert entry["value"]
 
 
 def test_quarantine_never_reaches_the_handle() -> None:

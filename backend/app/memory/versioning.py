@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import copy
 import json
+from datetime import datetime, timezone
 from typing import Any
 
 from app.memory.canonicalizer import NORM_VERSION, SCHEMA_VERSION, canonicalize
 from app.memory.conflict import _TRACKED_SECTIONS, compare
 from app.memory.handle import generate_handle
 from app.schema import canonical as canon
+from app.schema import dynamic as dyn
 
 # Audit artifacts: preserved on the record, deliberately excluded from the
 # bytes that produce the handle.
@@ -25,7 +27,7 @@ from app.schema import canonical as canon
 # handle, which is the one property a content-addressed store cannot give up.
 # `_unmapped` is excluded for the plainer reason that quarantine is not state.
 UNHASHED_KEYS = ("conflicts", "history", "_unmapped", "reinforced",
-                 "parent_handle", "state_version")
+                 "retractions", "parent_handle", "state_version")
 
 STATE_VERSION = 2  # 1 = pre-registry raw keys; 2 = canonical paths
 
@@ -155,6 +157,78 @@ def evolve_state(
             "ts": record["timestamp"],
         })
 
+    # Retractions last: a message may state a value and withdraw another in
+    # the same breath, and the withdrawal has to win over anything the merge
+    # just carried forward.
+    for record in _apply_retractions(new_state, new_extracted.get("retractions") or []):
+        new_state["history"].append(record)
+
     sealed, new_handle = _seal(new_state)
     sealed["parent_handle"] = old_handle
     return sealed, new_handle
+
+
+def _apply_retractions(
+    state: dict[str, Any], retractions: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Remove withdrawn concepts from active state; return history records.
+
+    "Actually ignore the insurance figure" has to take the field out of active
+    state, not merely annotate it. A value that is still live is still sent to
+    the model, so a retraction that only logs is not a retraction.
+    """
+    removed: list[dict[str, Any]] = []
+    if not retractions:
+        return removed
+    now = datetime.now(timezone.utc).isoformat()
+
+    for entry in retractions:
+        concept = str(entry.get("concept") or entry.get("raw") or "").strip()
+        if not concept:
+            continue
+        for path in _paths_for_concept(state, concept):
+            value = canon.read_path(state, path)
+            if value is None:
+                continue
+            _delete_path(state, path)
+            removed.append({
+                "field": path, "value": value, "reason": "retracted",
+                "resolution": "retracted", "ts": now,
+            })
+    return removed
+
+
+def _paths_for_concept(state: dict[str, Any], concept: str) -> list[str]:
+    """Every live path a withdrawn concept could name — dynamic or registry."""
+    wanted = dyn.content_words(concept)
+    if not wanted:
+        return []
+    found: list[str] = []
+
+    block = state.get(dyn.SECTION) or {}
+    for slug in list(block):
+        if dyn.words_cover(wanted, dyn.content_words(slug.replace("_", " "))):
+            found.extend(canon.leaf_paths_in({slug: block[slug]}, dyn.SECTION))
+
+    # a retraction may also name a registry field ("forget the deadline")
+    spec = canon.resolve(concept)
+    if spec is not None and canon.read_path(state, spec.path) is not None:
+        found.append(spec.path)
+    return found
+
+
+def _delete_path(state: dict[str, Any], path: str) -> None:
+    """Remove a dotted path and any container it leaves empty."""
+    parts = path.split(".")
+    stack: list[tuple[dict[str, Any], str]] = []
+    cursor: Any = state
+    for part in parts[:-1]:
+        if not isinstance(cursor, dict) or part not in cursor:
+            return
+        stack.append((cursor, part))
+        cursor = cursor[part]
+    if isinstance(cursor, dict):
+        cursor.pop(parts[-1], None)
+    for parent, key in reversed(stack):
+        if isinstance(parent.get(key), dict) and not parent[key]:
+            parent.pop(key, None)
