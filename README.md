@@ -9,7 +9,7 @@
   <img src="https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white"/>
   <img src="https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black"/>
   <img src="https://img.shields.io/badge/MySQL-8-4479A1?logo=mysql&logoColor=white"/>
-  <img src="https://img.shields.io/badge/tests-80%20passing-6B9080"/>
+  <img src="https://img.shields.io/badge/tests-704%20passing-6B9080"/>
   <img src="https://img.shields.io/badge/Patent%20App%20No-202621017626-E07856"/>
 </p>
 
@@ -28,12 +28,20 @@
 
 <table align="center">
   <tr>
-    <td align="center"><b>70.7%</b><br><sub>tokens saved (measured)</sub></td>
     <td align="center"><b>10</b><br><sub>patent modules</sub></td>
-    <td align="center"><b>570</b><br><sub>tests passing</sub></td>
-    <td align="center"><b>SHA-256</b><br><sub>deterministic</sub></td>
+    <td align="center"><b>704</b><br><sub>tests passing</sub></td>
+    <td align="center"><b>SHA-256</b><br><sub>content-addressed</sub></td>
+    <td align="center"><b>0</b><br><sub>transcripts stored</sub></td>
   </tr>
 </table>
+
+<p align="center">
+  <b>▶ <a href="https://www.youtube.com/watch?v=3Ehd88D9xsw">Watch the demo video</a></b>
+  &nbsp;·&nbsp; <a href="https://statejar.com">Try it live at statejar.com</a>
+</p>
+
+<p align="center"><sub>Indian Utility Patent <b>202621017626</b> — “Deterministic State-Handle
+Based Memory for Multi-Session Conversational System”</sub></p>
 
 ---
 
@@ -47,11 +55,59 @@ Most AI systems "remember" you by re-reading your *entire* chat history on every
 | 🧾 **What reaches the LLM** | The entire chat history, every single time | Only the precise fields the question actually needs |
 | 🧭 **Consistency** | Drifts and forgets over long sessions | Deterministic — same fact, same answer, forever |
 | 🔍 **Auditability** | A black box — hard to prove what the AI used | Every fact carries a SHA-256 handle + full replay log |
-| 💸 **Cost per query** | Grows as the conversation grows | Stays flat, no matter how long the history is |
+| 💸 **Cost per query** | Grows with every turn, without bound | Grows with the *state*, not the transcript — see [Benchmark](#benchmark) for where the crossover actually sits |
 
 **See it live:** open the [Playground](https://statejar.com), type *"My name is Ayaan, I prefer email, budget ₹2000"*, start a **new session**, then ask *"Book my delivery"* — watch it pull back exactly 3 fields instead of replaying anything.
 
 **Why it's more than a demo:** this runs on a patent-pending (Indian Patent **202621017626**) 10-module pipeline — extraction → canonicalization → content-addressed sealing → minimal-disclosure retrieval → append-only versioning → full audit replay. Details below. ⬇️
+
+---
+
+## 🧷 What StateJar actually guarantees
+
+A memory layer for conversational AI. Three claims, each phrased as what you can
+watch it do in the Playground in under a minute.
+
+**1 · It refuses to guess.** A value passes type validation before it enters
+state. `max load per container is 24 tonnes` classifies as a quantity, and a
+money field will not take a quantity — so it is *declined*, not coerced into a
+budget of twenty-four rupees. Every decline is recorded with a reason and shown
+in the Memory State panel.
+
+**2 · One field, one value.** A `(slot, qualifier)` uniqueness invariant is
+asserted at the STORE boundary, so two values for one concept cannot both be
+current. When you change your mind the old value moves to history and is never
+sent to the model.
+
+**3 · The handle is portable and verifiable.** State is content-addressed:
+serialise it canonically, hash it, and the same bytes always produce the same
+handle. Restoring one re-derives the handle and refuses if they disagree — so a
+restore that succeeds is a verification. Handles cross sessions and model
+vendors, because state is data rather than a feature of somebody's product.
+
+### The pipeline
+
+```
+INGEST → EXTRACT → CANONICALIZE → HANDLE → STORE → RETRIEVE → AUDIT
+```
+
+Extraction runs **before** canonicalization. That order is the argument: a
+probabilistic tier can only ever *propose*, and the deterministic layer decides.
+It is why a language model in the pipeline does not make the pipeline
+probabilistic.
+
+### What runs in production, precisely
+
+Deployed extraction is **rules only**. GLiNER2 (tier 2) needs `gliner` and
+`torch`, which live in `requirements-ml.txt` and are deliberately **not**
+installed on Railway — production builds stay small. Tier 3 (LLM extraction) is
+off by default behind `EXTRACTOR_LLM_FALLBACK`, needs a provider key on the
+calling account, and **has never run in production**. The tier chips in the
+Playground show which tiers actually ran on each turn, including the ones that
+were attempted and failed.
+
+Known gaps are written down rather than hidden: see
+[`docs/known-issues.md`](docs/known-issues.md).
 
 ---
 
@@ -110,7 +166,7 @@ The transcript never touches the LLM — it was never even stored.
 
 ## 📈 Benefits
 
-* **70.7% fewer tokens** — measured, not estimated ([benchmark](backend/benchmarks/results.md))
+* **Fewer tokens on long conversations** — and *more* on short ones. The crossover is near turn 14 on the 17-turn demo; the [Benchmark](#benchmark) section states both numbers and their baselines rather than quoting the flattering one.
 * **Lower inference cost**
 * **Faster response time**
 * **Reduced context-window pressure**
@@ -223,11 +279,35 @@ flowchart LR
 - Pydantic v2
 - bcrypt + JWT Authentication
 - AES-256-GCM Encryption
-- React 18 + Vite
-- OpenRouter Gateway
-- pytest (205 tests)
+- React 18 + Vite + react-router-dom (not Next.js)
+- OpenRouter gateway, plus native OpenAI / Anthropic / Gemini / Ollama
+- pytest — **704 passing, 1 skipped**
+
+Deployed as FastAPI + MySQL on **Railway**, static frontend on **Vercel**.
 
 ## Benchmark
+
+**Read the scope before quoting the number.** Two different measurements exist
+in this project and they answer different questions:
+
+| Measurement | Baseline | Result |
+|---|---|---|
+| `benchmarks/benchmark.py` — scripted 30-turn, 3-session run | full-transcript replay | −70.7% tokens |
+| The in-app 17-turn relief demo | full-transcript replay | **−20% at turn 5, +18% at turn 17**, crossover near turn 14 |
+
+The second is the honest one to plan around: **savings are negative early**.
+With three short messages there is less to replay than a state plus its
+scaffolding costs, and the demo shows those turns rather than starting the chart
+where it looks good. The gap opens as the conversation grows, because a
+transcript grows without bound and state does not.
+
+Token savings is therefore **not** offered here as the headline benefit. The
+headline is that the memory is deterministic, inspectable, and refuses to guess.
+Savings are a consequence, and a conversation-length-dependent one.
+
+There is **no accuracy benchmark**. No labelled evaluation set exists for this
+project, so no extraction-accuracy figure appears anywhere in this README — and
+any such number you see quoted about StateJar, including from us, is unmeasured.
 
 Measured by [`backend/benchmarks/benchmark.py`](backend/benchmarks/benchmark.py) — a scripted 30-turn, 3-session conversation through the real memory core (no LLM calls, tiktoken `cl100k_base`, offline):
 
@@ -251,6 +331,7 @@ Full report with per-turn CSV: [`backend/benchmarks/results.md`](backend/benchma
 | [`scripts/check-secrets.sh`](scripts/check-secrets.sh) | Pre-commit guard that refuses credential-shaped strings. Enable it once: `ln -sf ../../scripts/check-secrets.sh .git/hooks/pre-commit` — then `./scripts/check-secrets.sh --all` audits everything already tracked. |
 | [`docs/deployment.md`](docs/deployment.md) | Deploying the stack: Railway (API + MySQL) and Vercel (frontend), with the custom domain. |
 | [`backend/benchmarks/results.md`](backend/benchmarks/results.md) | Full benchmark report, per-turn CSV included. |
+| [`docs/known-issues.md`](docs/known-issues.md) | **Known issues** — behaviour that is wrong, understood, and not yet fixed, with what a fix would have to touch. Read this before trusting a number StateJar gives you. |
 
 The public API base is **`https://api.statejar.com`**. The original
 `https://statejar-production.up.railway.app` points at the same service and
@@ -273,26 +354,32 @@ curl https://api.statejar.com/api/v1/health
 <details>
 <summary><b>🛠️ Local Setup (click to expand)</b></summary>
 
-Prereqs: Python 3.12+, Node 18+, XAMPP (MySQL running).
+Prereqs: Python 3.12+, Node 18+, and MySQL 8 running (XAMPP is fine).
 
 ```bash
 # 1. Clone
 git clone https://github.com/KING-OF-FLAME/StateJar.git && cd StateJar
 
-# 2. Database — import the schema into XAMPP MySQL
-#    (phpMyAdmin → Import → db/migrations/001_init.sql, or:)
+# 2. Database — apply migrations in numeric order.
+#    001 creates the schema; the rest are additive.
 mysql -u root < db/migrations/001_init.sql
+for f in db/migrations/0*.sql; do mysql -u root statejar < "$f"; done
 
 # 3. Backend
 cd backend
 pip install -r requirements.txt
-copy .env.example .env        # then edit JWT_SECRET / AES_KEY
+cp .env.example .env          # Windows: copy .env.example .env
+#    Then set JWT_SECRET and AES_KEY to real random values. AES_KEY must be
+#    exactly 32 bytes. Never commit .env — it is gitignored, .env.example is not.
+python -c "import secrets; print(secrets.token_urlsafe(48))"
 
 # 4. Run the API
 uvicorn app.main:app --reload --port 8000
 
-# 5. Verify
-pytest                         # 80 passed
+# 5. Verify. The suite does NOT need MySQL — override the DB so each
+#    TestClient does not pay a connection timeout (10 min -> ~100 s).
+DB_URL="sqlite:///:memory:" EXTRACTOR_MODE=rules pytest -q
+#    -> 704 passed, 1 skipped
 curl http://localhost:8000/api/v1/health
 
 # 6. Frontend (new terminal)
@@ -300,6 +387,15 @@ cd frontend
 npm install
 npm run dev                    # → http://localhost:5173
 ```
+
+The app also boots without any provider key: `/memory/ingest` runs the whole
+memory pipeline locally, so the Playground panels, handles and audit trail all
+work before you have configured a model. A key is only needed for a model's
+*reply*.
+
+Every environment variable is documented in
+[`backend/.env.example`](backend/.env.example) — placeholders only, never real
+values — and explained in the in-app **Help** centre under *Settings*.
 
 Sign up → save a key for any provider (OpenRouter, OpenAI, Anthropic, Gemini,
 or point at a local Ollama) in **API Keys** → open **Playground** → say
@@ -321,8 +417,11 @@ the fields it needs.
   picker, and any custom model id passes through unwhitelisted.
 - ✅ **Benchmark suite** — *shipped.* See [Benchmark](#benchmark).
 - ✅ **Audit-log UI** — *shipped.* Provenance timeline with per-entry replay.
-- **GLiNER as primary extractor** (rule-based becomes fallback) for open-domain
-  extraction — env-gated today via `EXTRACTOR_MODE`
+- **GLiNER2 in production** — the code ships and is env-gated via
+  `EXTRACTOR_MODE`, but its `gliner`/`torch` dependencies are deliberately not
+  installed on Railway, so deployed extraction is rules only today.
+- **Tier 3 (LLM extraction) exercised in production** — implemented, off by
+  default, and never yet run on the deployed instance.
 - Org/team workspaces, handle export API
 
 ## 📄 License
