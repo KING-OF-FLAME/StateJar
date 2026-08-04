@@ -83,7 +83,9 @@ export default function Layout() {
   return (
     <div className="shell">
       <aside className="sidebar">
-        <Link className="brand" to="/">State<span className="jar">Jar</span></Link>
+        {/* signed in, the brand goes to your console, not to the page
+            inviting you to create the account you are already using */}
+        <Link className="brand" to="/dashboard">State<span className="jar">Jar</span></Link>
         <nav className="side-nav">
           {NAV.map((n) => (
             <NavLink key={n.to} to={n.to} className={({ isActive }) => (isActive ? 'active' : '')}>

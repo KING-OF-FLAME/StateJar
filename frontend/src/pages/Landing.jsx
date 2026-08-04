@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
+import AccountMenu, { signOut } from '../components/AccountMenu.jsx'
+import { isAuthed } from '../lib/api.js'
 
 const PROBLEMS = [
   {
@@ -248,6 +250,15 @@ function VideoModal({ module: mod, onClose }) {
 }
 
 export default function Landing() {
+  /* Read once, synchronously. The token is loaded from localStorage when
+     lib/api is imported, so there is no resolving state and therefore no
+     window in which this header can paint the wrong answer. */
+  const authed = isAuthed()
+  const home = authed ? '/dashboard' : '/'
+  const leave = () => {
+    signOut()
+    window.location.href = '/login'
+  }
   const [menuOpen, setMenuOpen] = useState(false)
   const [scrolled, setScrolled] = useState(false)
   const [activeModule, setActiveModule] = useState(null)
@@ -282,7 +293,7 @@ export default function Landing() {
     <>
       <nav className={`nav${scrolled ? ' nav-scrolled' : ''}`} aria-label="Main navigation">
         <div className="container nav-inner">
-          <a className="brand" href="/">
+          <a className="brand" href={home}>
             <img className="brand-logo" src="/logo-mark.png" width="23" height="27" alt="StateJar logo — a jar holding structured memory" />
             State<span className="jar">Jar</span>
           </a>
@@ -298,8 +309,14 @@ export default function Landing() {
             {NAV_LINKS.map(([href, label]) => (
               <a key={href} href={href}>{label}</a>
             ))}
-            <a className="btn btn-ghost btn-nav" href="/login">Sign in</a>
-            <a className="btn btn-primary btn-nav" href="/signup">Sign up free</a>
+            {authed ? (
+              <AccountMenu />
+            ) : (
+              <>
+                <a className="btn btn-ghost btn-nav" href="/login">Sign in</a>
+                <a className="btn btn-primary btn-nav" href="/signup">Sign up free</a>
+              </>
+            )}
           </div>
         </div>
       </nav>
@@ -308,7 +325,7 @@ export default function Landing() {
       <div className={`nav-overlay${menuOpen ? ' open' : ''}`} onClick={closeMenu} aria-hidden="true" />
         <aside className={`nav-panel${menuOpen ? ' open' : ''}`} aria-label="Menu" aria-hidden={!menuOpen}>
           <div className="nav-panel-head">
-            <a className="brand" href="/" onClick={closeMenu}>
+            <a className="brand" href={home} onClick={closeMenu}>
               <img className="brand-logo" src="/logo-mark.png" width="23" height="27" alt="StateJar logo" />
               State<span className="jar">Jar</span>
             </a>
@@ -323,8 +340,18 @@ export default function Landing() {
             ))}
           </div>
           <div className="nav-panel-ctas">
-            <a className="btn btn-ghost" href="/login" onClick={closeMenu}>Sign in</a>
-            <a className="btn btn-primary" href="/signup" onClick={closeMenu}>Sign up free</a>
+            {authed ? (
+              <>
+                <a className="btn btn-primary" href="/dashboard" onClick={closeMenu}>Dashboard</a>
+                <a className="btn btn-ghost" href="/profile" onClick={closeMenu}>Profile</a>
+                <button type="button" className="btn btn-ghost" onClick={leave}>Log out</button>
+              </>
+            ) : (
+              <>
+                <a className="btn btn-ghost" href="/login" onClick={closeMenu}>Sign in</a>
+                <a className="btn btn-primary" href="/signup" onClick={closeMenu}>Sign up free</a>
+              </>
+            )}
             <a className="btn btn-ghost" href="/playground" onClick={closeMenu}>Open the Playground</a>
           </div>
           <p className="nav-panel-foot mono">Indian Patent 202621017626</p>
@@ -489,7 +516,7 @@ export default function Landing() {
       <footer>
         <div className="container footer-grid">
           <div className="footer-col">
-            <a className="brand" href="/">
+            <a className="brand" href={home}>
               <img className="brand-logo" src="/logo-mark.png" width="23" height="27" alt="StateJar logo" />
               State<span className="jar">Jar</span>
             </a>
@@ -498,8 +525,9 @@ export default function Landing() {
           <div className="footer-col">
             <h3 className="footer-head">Product</h3>
             <a href="/playground">Playground</a>
-            <a href="/signup">Sign up free</a>
-            <a href="/login">Sign in</a>
+            {authed
+              ? <a href="/dashboard">Dashboard</a>
+              : <><a href="/signup">Sign up free</a><a href="/login">Sign in</a></>}
           </div>
           <div className="footer-col">
             <h3 className="footer-head">Learn</h3>

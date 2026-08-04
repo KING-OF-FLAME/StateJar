@@ -1841,3 +1841,39 @@ body.presenter-mode .card, body.presenter-mode .panel { border-color: #D8D2C8; }
   .pub-cta { padding: 6px 11px; font-size: 0.82rem; }
   .pub-main { padding: 18px 14px 0; }
 }
+
+/* ---------- account menu (signed-in header affordance) ---------- */
+.acct { position: relative; display: inline-flex; align-items: center; gap: 8px; }
+.acct-dash { font-size: 0.87rem; padding: 7px 15px; white-space: nowrap; }
+.acct-trigger {
+  display: inline-flex; align-items: center; gap: 4px; cursor: pointer;
+  background: none; border: 1px solid var(--line); border-radius: 999px;
+  padding: 4px 9px 4px 4px; font: inherit; color: var(--ink);
+}
+.acct-trigger:hover { border-color: var(--accent); }
+.acct-avatar {
+  width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--accent); color: #FAF8F5;
+  font-size: 0.78rem; font-weight: 650; line-height: 1;
+}
+.acct-caret { font-size: 0.62rem; color: var(--ink-faint); }
+.acct-menu {
+  position: absolute; top: calc(100% + 8px); right: 0; z-index: 60;
+  min-width: 172px; display: grid;
+  background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: 0 10px 28px rgba(26, 26, 46, 0.11); padding: 6px; gap: 1px;
+}
+.acct-who {
+  font-size: 0.74rem; color: var(--ink-faint); padding: 6px 10px 7px;
+  border-bottom: 1px solid var(--line); margin-bottom: 4px;
+  overflow-wrap: anywhere;
+}
+.acct-menu a, .acct-menu button {
+  display: block; width: 100%; text-align: left; cursor: pointer;
+  background: none; border: none; font: inherit; font-size: 0.88rem;
+  color: var(--ink-soft); text-decoration: none; padding: 8px 10px; border-radius: 7px;
+}
+.acct-menu a:hover, .acct-menu button:hover {
+  background: rgba(224, 120, 86, 0.08); color: var(--ink);
+}
+@media (max-width: 640px) { .acct-dash { display: none; } }
