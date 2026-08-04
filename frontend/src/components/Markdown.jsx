@@ -22,10 +22,12 @@ export default function Markdown({ children, className = '' }) {
           ol: ({ children }) => <ol className="md-ol">{children}</ol>,
           li: ({ children }) => <li className="md-li">{children}</li>,
           strong: ({ children }) => <strong className="md-strong">{children}</strong>,
-          code: ({ inline, children }) =>
-            inline
-              ? <code className="md-code">{children}</code>
-              : <pre className="md-pre"><code>{children}</code></pre>,
+          // react-markdown v10 dropped the `inline` prop, so branching on it
+          // sent every inline span down the block path — a `<pre>` inside the
+          // reply bubble, which the browser then hoists out of its paragraph.
+          // Styling `code` and `pre` separately needs no such flag.
+          code: ({ children }) => <code className="md-code">{children}</code>,
+          pre: ({ children }) => <pre className="md-pre">{children}</pre>,
           a: ({ href, children }) => (
             // a model can emit any URL; never let it open with opener access
             <a href={href} target="_blank" rel="noopener noreferrer nofollow">{children}</a>

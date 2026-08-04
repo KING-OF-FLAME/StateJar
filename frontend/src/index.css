@@ -924,7 +924,8 @@ footer {
   font-family: var(--mono, ui-monospace, monospace); font-size: 0.84em;
   overflow-x: auto;            /* a long line scrolls itself, not the page */
 }
-.md-pre code { background: none; padding: 0; }
+/* a fenced block owns its own chrome; the code inside it is plain */
+.md-pre code, .md-pre .md-code { background: none; padding: 0; font-size: 1em; }
 .md-table-wrap { overflow-x: auto; margin: 0 0 0.7em; }
 .md-table-wrap table { border-collapse: collapse; font-size: 0.88em; }
 .md-table-wrap th, .md-table-wrap td {
@@ -1761,4 +1762,42 @@ body.presenter-mode .card, body.presenter-mode .panel { border-color: #D8D2C8; }
   .help-toc ul { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); }
   .about-stage { grid-template-columns: 24px minmax(0, 1fr); }
   .about-stage-line { grid-column: 2; }
+}
+
+/* ---------- public shell (About / API Docs / Help, logged out) ---------- */
+.pub-shell { min-height: 100vh; display: flex; flex-direction: column; }
+.pub-bar {
+  position: sticky; top: 0; z-index: 40;
+  background: rgba(250, 248, 245, 0.92); backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--line);
+}
+.pub-bar-inner {
+  max-width: 1150px; margin: 0 auto; padding: 12px 20px;
+  display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+}
+.pub-bar .brand { display: inline-flex; align-items: center; gap: 7px; text-decoration: none; }
+.pub-nav { display: flex; gap: 4px; margin-right: auto; flex-wrap: wrap; }
+.pub-nav a {
+  font-size: 0.9rem; color: var(--ink-soft); text-decoration: none;
+  padding: 6px 11px; border-radius: 8px;
+}
+.pub-nav a:hover { background: rgba(224, 120, 86, 0.08); color: var(--ink); }
+.pub-nav a.active { color: var(--accent); background: var(--accent-soft); }
+.pub-ctas { display: flex; gap: 8px; }
+.pub-cta { font-size: 0.87rem; padding: 7px 15px; white-space: nowrap; }
+.pub-main { flex: 1; max-width: 1150px; width: 100%; margin: 0 auto; padding: 24px 20px 0; min-width: 0; }
+.pub-foot {
+  border-top: 1px solid var(--line); margin-top: 48px;
+  padding: 24px 20px; text-align: center;
+}
+.pub-foot p { color: var(--ink-faint); font-size: 0.88rem; margin-bottom: 6px; }
+.pub-foot a { color: var(--accent); }
+.pub-foot .mono { font-size: 0.74rem; }
+
+@media (max-width: 640px) {
+  .pub-bar-inner { gap: 10px; padding: 10px 14px; }
+  .pub-nav { order: 3; width: 100%; margin-right: 0; }
+  .pub-ctas { margin-left: auto; }
+  .pub-cta { padding: 6px 11px; font-size: 0.82rem; }
+  .pub-main { padding: 18px 14px 0; }
 }

@@ -79,16 +79,22 @@ const MODULES = [
   ['M10', 'Audit & Replay', 'Reconstruct exactly what any response saw.'],
 ]
 
+/* In-page anchors first, then the pages a visitor can read without an account.
+   About, the API reference and Help are all reachable logged out — see
+   PUBLIC_PATHS in Layout — so someone deciding whether to sign up can read
+   what this is and how to call it before they do. */
 const NAV_LINKS = [
   ['#problem', 'Why StateJar'],
   ['#how', 'How it works'],
   ['#modules', 'Patent modules'],
+  ['/about', 'About'],
+  ['/api-docs', 'API Docs'],
 ]
 
 const STATS = [
   { value: 78, suffix: '%', label: 'tokens saved', count: true },
   { value: 10, suffix: '', label: 'patent modules', count: true },
-  { value: 65, suffix: '', label: 'tests passing', count: true },
+  { value: 681, suffix: '', label: 'tests passing', count: true },
   { value: 'SHA-256', label: 'deterministic', count: false },
 ]
 
@@ -292,7 +298,8 @@ export default function Landing() {
             {NAV_LINKS.map(([href, label]) => (
               <a key={href} href={href}>{label}</a>
             ))}
-            <a className="btn btn-ghost btn-nav" href="/playground">Open the Playground</a>
+            <a className="btn btn-ghost btn-nav" href="/login">Sign in</a>
+            <a className="btn btn-primary btn-nav" href="/signup">Sign up free</a>
           </div>
         </div>
       </nav>
@@ -316,8 +323,9 @@ export default function Landing() {
             ))}
           </div>
           <div className="nav-panel-ctas">
-            <a className="btn btn-ghost" href="/login" onClick={closeMenu}>Log in</a>
-            <a className="btn btn-primary" href="/playground" onClick={closeMenu}>Open the Playground</a>
+            <a className="btn btn-ghost" href="/login" onClick={closeMenu}>Sign in</a>
+            <a className="btn btn-primary" href="/signup" onClick={closeMenu}>Sign up free</a>
+            <a className="btn btn-ghost" href="/playground" onClick={closeMenu}>Open the Playground</a>
           </div>
           <p className="nav-panel-foot mono">Indian Patent 202621017626</p>
         </aside>
@@ -490,8 +498,14 @@ export default function Landing() {
           <div className="footer-col">
             <h3 className="footer-head">Product</h3>
             <a href="/playground">Playground</a>
-            <a href="/signup">Sign up</a>
-            <a href="/login">Log in</a>
+            <a href="/signup">Sign up free</a>
+            <a href="/login">Sign in</a>
+          </div>
+          <div className="footer-col">
+            <h3 className="footer-head">Learn</h3>
+            <a href="/about">About</a>
+            <a href="/api-docs">API reference</a>
+            <a href="/help">Help centre</a>
           </div>
           <div className="footer-col">
             <h3 className="footer-head">Legal & patent</h3>

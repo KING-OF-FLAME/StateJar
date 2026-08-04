@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api } from '../lib/api.js'
+import { api, isAuthed } from '../lib/api.js'
 import {
   CONCEPTS, ENDPOINTS, ERROR_CODES, RATE_LIMITS,
 } from '../components/docs/endpoints.js'
@@ -132,10 +132,18 @@ export default function ApiDocs() {
     localStorage.setItem('statejar_docs_lang', id)
   }
 
+  /* Docs must render without a session — a visitor reads these before signing
+     up. The guard is not decoration: `api()` turns any 401 into a redirect to
+     /login, so calling this logged out would bounce the reader off the page
+     they came to read, and the catch below would never run. */
   useEffect(() => {
+    if (!isAuthed()) {
+      setKeyInfo(false)
+      return
+    }
     api('/apikeys')
       .then((keys) => setKeyInfo(keys.find((k) => k.status === 'active') || false))
-      .catch(() => setKeyInfo(false))  // docs must render without a session
+      .catch(() => setKeyInfo(false))
   }, [])
 
   // highlight the section currently in view

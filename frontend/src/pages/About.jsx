@@ -205,6 +205,14 @@ export default function About() {
         <ul className="about-status">
           <li>
             <strong>Indian Utility Patent 202621017626</strong> — filed.
+            {' '}“Deterministic State-Handle Based Memory for Multi-Session
+            Conversational System”.
+          </li>
+          <li>
+            <strong>Ten modules, ten objectives.</strong> The disclosure sets
+            out ten objectives; the codebase implements one module per
+            objective, each in its own file. The mapping is in the repository
+            README, and every one of them is exercised by the test suite.
           </li>
           <li>
             <strong>Deployed</strong> at statejar.com, with the console, the API
@@ -220,6 +228,10 @@ export default function About() {
             it has a <Link to="/help">help entry</Link>.
           </li>
         </ul>
+        <p className="about-note">
+          No peer-reviewed publication is claimed here, because there is not one
+          to cite yet. If that changes, this is where it goes.
+        </p>
       </section>
 
       <section className="about-block about-gaps">
