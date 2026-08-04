@@ -41,3 +41,54 @@ logs/
 .vscode/
 .idea/
 .DS_Store
+
+# --- hardening pass: categories the audit found no tracked files in, but
+# --- which had no rule either. Nothing was untracked to add these; they exist
+# --- so a stray artefact cannot become tracked in the first place.
+
+# Python (beyond the basics above)
+.mypy_cache/
+.ruff_cache/
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+env/
+ENV/
+
+# Node / build output
+build/
+out/
+.next/
+.turbo/
+.vite/
+*.tsbuildinfo
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.eslintcache
+
+# Local databases (kept alongside *.db and *.sqlite3 above)
+*.sqlite
+*.sqlite-journal
+*.db-journal
+*.sql.gz
+*.dump
+
+# Deploy-local state
+.vercel/
+.railway/
+.netlify/
+
+# Runtime junk
+tmp/
+.cache/
+*.swp
+*.swo
+Thumbs.db
+
+# Playwright / QA output produced by the acceptance scripts
+qa_*.png
+playwright-report/
+test-results/
