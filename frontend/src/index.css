@@ -1899,3 +1899,8 @@ body.presenter-mode .card, body.presenter-mode .panel { border-color: #D8D2C8; }
 .prof-error { font-size: 0.82rem; color: #B4462F; }
 .prof-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
 .prof-notice { font-size: 0.85rem; color: var(--green); }
+
+/* Heading placeholder while the profile request is in flight. Reserves the
+   line so the page does not jump, and shows nothing rather than a value that
+   is about to be replaced. */
+.dash-h1-pending { visibility: hidden; }
