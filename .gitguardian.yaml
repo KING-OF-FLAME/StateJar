@@ -1,20 +1,66 @@
-# GitGuardian configuration.
+# GitGuardian configuration (ggshield: pre-commit, CI, `ggshield secret scan`).
 #
-# backend/tests/** contains provider-key *fixtures*, never live credentials.
-# They are built by string concatenation in tests/conftest.py (fake_key())
-# precisely so no scanner pattern matches. Two assertions still hold
-# deliberately key-shaped strings, split across a `+`, because the code under
-# test is the audit scrubber — it exists to refuse secret-looking input, so a
-# test feeding it a harmless string would assert nothing.
+# WHAT THIS FILE DOES NOT DO, because it cost a red PR to learn: the
+# "GitGuardian Security Checks" run on a pull request comes from the GitGuardian
+# **GitHub App**, which scans the diff server-side and reports against dashboard
+# incidents. It does not read this file — only ggshield does. So an exclusion
+# here silences the local and CI scan and changes nothing about the check on a
+# PR; that is triaged in the GitGuardian dashboard. Anything ignored here has to
+# be justified well enough to survive being read twice.
 #
-# Scoped to the test tree by PATH rather than by disabling the detector:
-# `ignored-detectors` applies repo-wide, so silencing "Generic High Entropy
-# Secret" there would also blind the scanner to a real key in application
-# code. Everything outside backend/tests/** stays fully scanned, and
-# scripts/check-secrets.sh blocks a credential at commit time.
+# WHY THIS IS NO LONGER A DIRECTORY IGNORE.
+# This file used to carry `ignored-paths: backend/tests/**`, and
+# scripts/check-secrets.sh skipped the same tree. Between them, a real
+# credential pasted into any test file would have been scanned by nothing. That
+# was demonstrated rather than theorised: a live-shaped `sk-or-v1-` key staged
+# under backend/tests/ produced "check-secrets: clean". A scanner that reports
+# clean on a tree that has findings is worse than no scanner, because it
+# manufactures confidence. Every exclusion below is scoped to one known-inert
+# value, by hash.
 
 version: 2
 
 secret:
-  ignored-paths:
-    - backend/tests/**
+  ignored-matches:
+    # The shared test-fixture account password, used by every auth-touching
+    # test to create a throwaway account. Inert: it is POSTed to a FastAPI
+    # TestClient bound to an in-memory SQLite engine that is created and
+    # dropped inside the test module, so it authenticates against nothing that
+    # outlives the process. It is not the password of any deployed account and
+    # appears nowhere in backend/.env. Referenced by SHA-256, not in the clear.
+    - name: >-
+        test-fixture account password (backend/tests/*) — in-memory SQLite
+        only, authenticates against no live service
+      match: f9e86556b81fb67a45915a929efcf635363e8786c1bcd8bf6aa127a750943e3a
+
+    # backend/tests/test_audit.py:103 — a deliberately key-shaped string, split
+    # across a `+` so it is never a literal, fed to the audit scrubber. The code
+    # under test exists to refuse secret-looking input, so a test feeding it a
+    # harmless string would assert nothing.
+    - name: >-
+        audit-scrubber negative fixture (test_audit.py) — assembled at runtime,
+        exists so the scrubber has something to refuse
+      match: 0b0c8945d226e0bf259b2294521a8b2515725f803d364cb4ed70714a06be11da
+
+    # Negative-test fixtures. Each is a value its test asserts is REJECTED --
+    # a JWT signed with the wrong secret, a login expected to fail, a mocked
+    # upstream 401 body. They authenticate against nothing by construction:
+    # a test feeding the rejection path a valid credential would assert the
+    # opposite of what it claims to.
+    - name: >-
+        test_security.py -- attacker-signed JWT secret, asserted to be rejected
+      match: 6a1a053fe597d825c4652a5a89c547709d7759c2b634ec02f85981e289cf0b7e
+    - name: >-
+        test_security.py -- wrong password, asserted to fail login and trip
+        the rate limiter
+      match: 135287200b283ed9dba3b478e153207da33793092327ba0b577bc37350604ec8
+    - name: >-
+        test_providers.py -- key-shaped string inside a mocked upstream 401
+        body, proving the error path does not echo it back
+      match: bbe2defc5ca23932389cfed6f20b80fec8f6c7b734293dcad1042d7687d52d1f
+
+  # No ignored-paths, deliberately. Provider-key fixtures elsewhere under
+  # backend/tests are built by concatenation in conftest.py::fake_key() so that
+  # no detector pattern matches them — which is the right way to keep a fixture
+  # quiet: make it genuinely not key-shaped, rather than tell the scanner to
+  # look away from the directory it lives in.
