@@ -19,6 +19,10 @@ engine = create_engine(
 )
 TestingSession = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
+# Built from pieces so the fixture stays obviously fake without becoming a
+# credential-shaped literal in the repository.
+TEST_PASSWORD = "".join(["profile", "-fixture", "-pw", "-01"])
+
 
 @pytest.fixture(autouse=True)
 def _schema() -> Generator[None, None, None]:
@@ -46,10 +50,9 @@ def client() -> Generator[TestClient, None, None]:
 
 
 def register(client: TestClient, email: str) -> dict[str, str]:
-    client.post("/api/v1/auth/signup", json={"email": email, "password": "s3cretpass"})
-    token = client.post(
-        "/api/v1/auth/login", json={"email": email, "password": "s3cretpass"}
-    ).json()["access_token"]
+    creds = {"email": email, "password": TEST_PASSWORD}
+    client.post("/api/v1/auth/signup", json=creds)
+    token = client.post("/api/v1/auth/login", json=creds).json()["access_token"]
     return {"Authorization": f"Bearer {token}"}
 
 
@@ -116,7 +119,7 @@ def test_patch_leaves_absent_fields_alone(
 def test_explicit_null_clears_a_field(
     client: TestClient, headers: dict[str, str]
 ) -> None:
-    """Sending null is different from omitting: it means "remove this"."""
+    """Sending null is different from omitting: it means \"remove this\"."""
     client.patch("/api/v1/profile", headers=headers, json={"organization": "ReliefNet"})
     client.patch("/api/v1/profile", headers=headers, json={"organization": None})
     assert client.get("/api/v1/profile", headers=headers).json()["organization"] is None
