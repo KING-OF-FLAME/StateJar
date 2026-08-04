@@ -9,6 +9,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 from app.apikeys import router as apikeys_router
+from app.profile import router as profile_router
 from app.auth.routes import router as auth_router
 from app.config import get_settings
 from app.llm.gateway import models_router
@@ -27,6 +28,7 @@ def _ensure_tables() -> None:
     with their own engine), requests will surface the real error instead.
     """
     from app.apikeys import apikeys_metadata
+    from app.profile import profile_metadata
     from app.auth.models import auth_metadata
     from app.database import engine
     from app.llm.gateway import llm_metadata
@@ -64,7 +66,7 @@ def _ensure_tables() -> None:
                         conn.execute(text("DROP TABLE memory_states_old"))
 
         for md in (auth_metadata, storage_metadata, audit_metadata, llm_metadata,
-                   apikeys_metadata):
+                   apikeys_metadata, profile_metadata):
             md.create_all(engine, checkfirst=True)
 
         # create_all never alters existing tables; add columns introduced by
@@ -191,6 +193,7 @@ def health() -> dict[str, str]:
 
 api_v1.include_router(auth_router)
 api_v1.include_router(apikeys_router)
+api_v1.include_router(profile_router)
 api_v1.include_router(keys_router)
 api_v1.include_router(models_router)
 api_v1.include_router(memory_router)

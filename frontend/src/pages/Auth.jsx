@@ -23,7 +23,10 @@ function AuthCard({ mode }) {
         body: { email, password },
       })
       setToken(access_token)
-      navigate('/dashboard')
+      /* A new account gets one optional profile step; a returning one does not.
+         The step carries a visible Skip and never blocks the Playground — the
+         demo path has to stay two clicks from signup. */
+      navigate(isSignup ? '/profile?onboarding' : '/dashboard')
     } catch (err) {
       setError(err.message)
     } finally {

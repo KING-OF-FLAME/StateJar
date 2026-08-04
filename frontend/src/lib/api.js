@@ -48,7 +48,20 @@ export async function api(path, { method = 'GET', body } = {}) {
   }
   const data = await resp.json().catch(() => ({}))
   if (!resp.ok) {
-    throw new Error(data.detail || `request failed (${resp.status})`)
+    /* A `detail` can be a string or a structured rejection. Passing an object
+       to `new Error` renders it "[object Object]", which threw away exactly the
+       part worth showing — the per-field reasons the API returns instead of
+       coercing a bad value. Keep the object on the error for callers that can
+       render it, and give the message a readable fallback for those that
+       cannot. */
+    const { detail } = data
+    const structured = detail && typeof detail === 'object'
+    const err = new Error(
+      (structured ? detail.error : detail) || `request failed (${resp.status})`,
+    )
+    if (structured) err.detail = detail
+    err.status = resp.status
+    throw err
   }
   return data
 }
