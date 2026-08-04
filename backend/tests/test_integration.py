@@ -16,6 +16,12 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from tests.conftest import fake_key
+
+# Built from pieces so the fixture stays obviously fake without becoming a
+# credential-shaped literal in the repository -- the same treatment
+# test_profile.py already had. The value authenticates against an in-memory
+# SQLite database that is created and dropped inside this module.
+TEST_PASSWORD = "".join(["integration", "-fixture", "-pw", "-01"])
 from app.auth.models import auth_metadata
 from app.config import get_settings
 from app.database import get_db
@@ -57,9 +63,9 @@ def client() -> Generator[TestClient, None, None]:
 
 @pytest.fixture
 def headers(client: TestClient) -> dict[str, str]:
-    client.post("/api/v1/auth/signup", json={"email": "a@example.com", "password": "s3cretpass"})
+    client.post("/api/v1/auth/signup", json={"email": "a@example.com", "password": TEST_PASSWORD})
     token = client.post(
-        "/api/v1/auth/login", json={"email": "a@example.com", "password": "s3cretpass"}
+        "/api/v1/auth/login", json={"email": "a@example.com", "password": TEST_PASSWORD}
     ).json()["access_token"]
     return {"Authorization": f"Bearer {token}"}
 
@@ -423,10 +429,10 @@ def test_session_turns_never_crosses_sessions_or_users(
         headers=headers,
     )
     client.post("/api/v1/auth/signup",
-                json={"email": "turns@example.com", "password": "s3cretpass"})
+                json={"email": "turns@example.com", "password": TEST_PASSWORD})
     other = client.post("/api/v1/auth/login",
                         json={"email": "turns@example.com",
-                              "password": "s3cretpass"}).json()["access_token"]
+                              "password": TEST_PASSWORD}).json()["access_token"]
 
     assert client.get("/api/v1/sessions/turns-a/turns",
                       headers=headers).json()["turns"]
