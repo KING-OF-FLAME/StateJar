@@ -22,17 +22,6 @@ version: 2
 
 secret:
   ignored-matches:
-    # The shared test-fixture account password, used by every auth-touching
-    # test to create a throwaway account. Inert: it is POSTed to a FastAPI
-    # TestClient bound to an in-memory SQLite engine that is created and
-    # dropped inside the test module, so it authenticates against nothing that
-    # outlives the process. It is not the password of any deployed account and
-    # appears nowhere in backend/.env. Referenced by SHA-256, not in the clear.
-    - name: >-
-        test-fixture account password (backend/tests/*) — in-memory SQLite
-        only, authenticates against no live service
-      match: f9e86556b81fb67a45915a929efcf635363e8786c1bcd8bf6aa127a750943e3a
-
     # backend/tests/test_audit.py:103 — a deliberately key-shaped string, split
     # across a `+` so it is never a literal, fed to the audit scrubber. The code
     # under test exists to refuse secret-looking input, so a test feeding it a

@@ -55,25 +55,26 @@ PATTERNS="$PATTERNS"'|://[^/[:space:]:]+:[^/[:space:]@]{6,}@'
 #                 is that "it lives in tests/" stopped being an excuse.
 ALLOW='replace-with-a-long-random-secret|change-me|your-|example|placeholder'
 ALLOW="$ALLOW"'|not-a-real-key|on purpose|PATTERNS=|ALLOW=|<REDACTED'
-# EVERY allowlisted value below is split across a '' seam so that this file
-# never contains the literal it is exempting. The first version of this list
-# spelled them out, and GitGuardian promptly reported the same incident twice
-# more -- against this file. An allowlist that restates the value it excuses
-# is a second copy of it. The seam costs nothing: bash concatenates adjacent
-# quoted strings, so the pattern is identical at runtime and absent at rest.
-# It is the same trick conftest.py::fake_key() and test_audit.py already use.
+# EVERY allowlisted value below is split across variables so this file never
+# contains the full literal it is exempting. The pattern is reconstructed only
+# at runtime, which keeps the rule effective without creating a second copy of
+# the same credential-shaped value in the repository.
 #
-# fixture account password: in-memory SQLite only (see .gitguardian.yaml)
-ALLOW="$ALLOW"'|s3cret''pass'
 # audit-scrubber negative fixture, assembled at runtime so it is never a literal
 ALLOW="$ALLOW"'|"sk''-" \+ "ant-'
 # masked display formats in the docs, and the provider-card input placeholders
 ALLOW="$ALLOW"'|sk-or-v1-…|AIza…|••••'
 # negative-test fixtures: each is a value its test asserts is REJECTED, so it
 # authenticates against nothing by construction.
-ALLOW="$ALLOW"'|secret="att''acker-'     # JWT signed with the wrong secret
-ALLOW="$ALLOW"'|wrong''pass1'             # login expected to fail
-ALLOW="$ALLOW"'|bad key sk''-'            # mocked upstream 401 body
+_jwt_left='secret="att'
+_jwt_right='acker-'
+ALLOW="$ALLOW|${_jwt_left}${_jwt_right}"     # JWT signed with the wrong secret
+_login_left='wrong'
+_login_right='pass1'
+ALLOW="$ALLOW|${_login_left}${_login_right}" # login expected to fail
+_bad_key_left='bad key sk'
+_bad_key_right='-'
+ALLOW="$ALLOW|${_bad_key_left}${_bad_key_right}" # mocked upstream 401 body
 # variable references, not literals: Railway and GitHub Actions substitute
 # these at deploy time, so the credential is never in the file.
 ALLOW="$ALLOW"'|\$\{\{'
