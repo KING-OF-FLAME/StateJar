@@ -639,6 +639,40 @@ class OllamaProvider(LLMProvider):
         ]
 
 
+class OllamaRemoteProvider(OllamaProvider):
+    """A remote or cloud Ollama, reached through StateJar's server.
+
+    Split from the local card because the two share an API and share nothing
+    else that matters. A local daemon is browser-direct: the prompt never
+    leaves the user's machine and there is no credential to hold. A remote one
+    is called by our backend with a key we store — a different trust model
+    entirely, and one card claiming both made the privacy promise unreadable.
+
+    Configuration is a separate row under a separate provider name, so saving
+    one cannot disturb the other.
+    """
+
+    name = "ollama_remote"
+    label = "Ollama (remote)"
+
+    @property
+    def base_url(self) -> str:
+        # No default. A remote host is something the user supplies; falling
+        # back to localhost here would silently send a "remote" call to the
+        # server's own loopback.
+        return ""
+
+    def _resolve_base(self, override: str | None) -> str:
+        candidate, _ = self.parse_config(override)
+        candidate = candidate.rstrip("/")
+        if not candidate.startswith(("http://", "https://")):
+            raise ProviderError(
+                "No remote Ollama host configured — add the base URL on the "
+                "API Keys page, or use the local Ollama card instead."
+            )
+        return candidate
+
+
 # --- demo ---------------------------------------------------------------------
 
 
@@ -688,13 +722,18 @@ PROVIDERS: dict[str, LLMProvider] = {
         AnthropicProvider(),
         GeminiProvider(),
         OllamaProvider(),
+        OllamaRemoteProvider(),
     )
 }
 
 # Providers a user can save a key for (demo is internal).
-KEYED_PROVIDERS: tuple[str, ...] = ("openrouter", "openai", "anthropic", "gemini", "ollama")
+KEYED_PROVIDERS: tuple[str, ...] = (
+    "openrouter", "openai", "anthropic", "gemini", "ollama", "ollama_remote",
+)
 
-# Providers reachable without a credential.
+# Providers reachable without a credential. The local Ollama is here and the
+# remote one deliberately is not: a remote host is exactly the case where a
+# key is required and stored.
 KEYLESS_PROVIDERS: frozenset[str] = frozenset({"ollama", "demo"})
 
 

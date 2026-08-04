@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api.js'
-import OllamaCard from './OllamaCard.jsx'
+import { OllamaLocalCard, OllamaRemoteCard } from './OllamaCard.jsx'
 
 /* One card per provider. Keys are write-only: once saved the console only
    ever sees the last four characters, so "Replace" is a fresh save rather
@@ -204,7 +204,8 @@ export default function ProviderCards() {
               onChanged={load}
             />
           ))}
-          <OllamaCard saved={saved.ollama || null} onChanged={load} />
+          <OllamaLocalCard saved={saved.ollama || null} onChanged={load} />
+          <OllamaRemoteCard saved={saved.ollama_remote || null} onChanged={load} />
         </div>
       )}
     </div>

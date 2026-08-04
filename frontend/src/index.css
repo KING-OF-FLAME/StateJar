@@ -1531,3 +1531,92 @@ body.presenter-mode .card, body.presenter-mode .panel { border-color: #D8D2C8; }
   border-color: rgba(212, 163, 47, 0.4);
 }
 .tier-chip.tier-failed .tier-dot { background: #D4A32F; }
+
+/* --- Ollama split: two trust models, two visual identities --------------- */
+.badge-remote {
+  font-family: var(--sans); font-size: 0.62rem; font-weight: 700;
+  letter-spacing: 0.08em; padding: 2px 6px; border-radius: 4px;
+  background: rgba(107, 144, 128, 0.18); color: #2F6B55;
+}
+.mp-local, .mp-remote {
+  font-family: var(--sans); font-size: 0.62rem; font-weight: 700;
+  letter-spacing: 0.06em; padding: 1px 5px; border-radius: 4px; margin-left: 6px;
+}
+.mp-local  { background: rgba(31, 111, 84, 0.14);  color: #1F6F54; }
+.mp-remote { background: rgba(192, 68, 42, 0.12);  color: #C0442A; }
+
+/* --- 17-turn relief demo -------------------------------------------------- */
+.relief-demo {
+  border: 1px solid var(--line); border-radius: 14px; background: var(--card);
+  padding: 14px 16px; margin-bottom: 14px;
+}
+.rd-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.rd-title { font-family: var(--sans); font-size: 0.86rem; font-weight: 600; }
+.rd-session { font-size: 0.74rem; color: var(--ink-faint); }
+.rd-progress {
+  font-family: var(--mono, ui-monospace, monospace); font-size: 0.74rem;
+  color: var(--ink-faint);
+}
+.rd-controls { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
+.rd-progressbar {
+  height: 3px; background: var(--line); border-radius: 2px; margin: 10px 0 12px;
+  overflow: hidden;
+}
+.rd-progressbar > div {
+  height: 100%; background: #C0442A; transition: width 320ms ease;
+}
+.rd-metrics { display: flex; align-items: center; gap: 22px; flex-wrap: wrap; }
+.rd-metric { display: flex; flex-direction: column; gap: 2px; }
+.rd-metric-num {
+  font-family: var(--serif, Georgia, serif); font-size: 1.7rem; line-height: 1;
+  color: var(--ink);
+}
+.rd-metric-label {
+  font-family: var(--sans); font-size: 0.7rem; color: var(--ink-faint);
+  letter-spacing: 0.02em;
+}
+.rd-curve { flex: 1; min-width: 200px; }
+.spark { display: block; overflow: visible; }
+.spark-empty { height: 44px; }
+.spark-line { fill: none; stroke: #C0442A; stroke-width: 1.8; stroke-linejoin: round; }
+.spark-zero { stroke: var(--line); stroke-width: 1; stroke-dasharray: 3 3; }
+.spark-dot { fill: #C0442A; }
+
+.savings {
+  margin: 12px 0 4px; padding: 8px 10px; border-radius: 8px;
+  background: rgba(26, 26, 46, 0.04);
+}
+.savings-main { font-family: var(--sans); font-size: 0.8rem; display: block; }
+.savings-pos { color: #1F6F54; }
+.savings-neg { color: #C0442A; }
+.savings-why {
+  display: block; margin-top: 4px; font-family: var(--sans);
+  font-size: 0.72rem; color: var(--ink-faint); font-style: italic;
+}
+
+.rd-chat { max-height: 300px; overflow-y: auto; margin-top: 10px; }
+.rd-marker {
+  margin-left: 6px; font-family: var(--sans); font-size: 0.6rem; font-weight: 700;
+  letter-spacing: 0.07em; text-transform: uppercase; padding: 1px 5px;
+  border-radius: 4px;
+}
+.rd-update    { background: rgba(212, 163, 47, 0.18); color: #8A6D1D; }
+.rd-retracted { background: rgba(192, 68, 42, 0.14);  color: #C0442A; }
+.rd-corrected { background: rgba(31, 111, 84, 0.14);  color: #1F6F54; }
+.rd-payoff { border: 1px solid rgba(192, 68, 42, 0.35); }
+
+.rd-endcard {
+  margin-top: 12px; padding: 14px; border-radius: 12px;
+  background: rgba(192, 68, 42, 0.05); border: 1px solid rgba(192, 68, 42, 0.2);
+}
+.rd-endcard h4 { margin: 0 0 10px; font-size: 0.94rem; }
+.rd-end-grid { display: flex; gap: 26px; flex-wrap: wrap; margin-bottom: 10px; }
+.rd-end-grid > div { display: flex; flex-direction: column; }
+.rd-end-grid b { font-family: var(--serif, Georgia, serif); font-size: 1.5rem; line-height: 1.1; }
+.rd-end-grid span { font-family: var(--sans); font-size: 0.7rem; color: var(--ink-faint); }
+.rd-end-baseline, .rd-end-note, .rd-end-handle {
+  font-family: var(--sans); font-size: 0.76rem; margin: 6px 0 0;
+}
+.rd-end-note { color: #8A6D1D; }
+.rd-end-handle code { font-size: 0.72rem; word-break: break-all; }
+.rd-end-hint { display: block; color: var(--ink-faint); font-size: 0.7rem; margin-top: 2px; }

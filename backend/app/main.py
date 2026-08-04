@@ -1,6 +1,7 @@
 """StateJar FastAPI application entrypoint."""
 
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -108,8 +109,47 @@ def _ensure_tables() -> None:
                         "ALTER TABLE memory_states "
                         "ADD COLUMN state_version INT NOT NULL DEFAULT 1"
                     ))
+
+        # migration 007 — the Ollama card became two. A saved config that
+        # carries an API key was always describing a remote daemon, so it
+        # moves to the remote provider; one without a key is a local daemon
+        # and stays. Nobody loses a setting either way.
+        if "provider_keys" in inspector.get_table_names():
+            _split_ollama_configs(engine)
     except Exception:  # noqa: BLE001 — DB down at boot must not kill the app
         pass
+
+
+def _split_ollama_configs(engine: Any) -> None:
+    """Re-file keyed Ollama configs under `ollama_remote`. Idempotent.
+
+    Read-and-rewrite rather than a bare UPDATE, because the stored value is
+    AES-encrypted: only the application can tell whether a row carries a key,
+    and therefore which of the two cards it belongs to.
+    """
+    from sqlalchemy import select
+
+    from app.llm.gateway import decrypt_key, provider_keys
+    from app.llm.providers import OllamaProvider
+
+    with engine.begin() as conn:
+        rows = conn.execute(
+            select(provider_keys.c.id, provider_keys.c.encrypted_key)
+            .where(provider_keys.c.provider == "ollama")
+        ).mappings().all()
+
+        for row in rows:
+            try:
+                _, api_key = OllamaProvider.parse_config(decrypt_key(row["encrypted_key"]))
+            except Exception:  # noqa: BLE001 — an unreadable row is left alone
+                continue
+            if not api_key:
+                continue          # no key: a local daemon, already on the right card
+            conn.execute(
+                provider_keys.update()
+                .where(provider_keys.c.id == row["id"])
+                .values(provider="ollama_remote")
+            )
 
 
 @asynccontextmanager

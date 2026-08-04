@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import Markdown from '../components/Markdown'
+import ReliefDemo from '../components/ReliefDemo.jsx'
 import { Link, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import AuditTimeline from '../components/AuditTimeline.jsx'
@@ -506,6 +507,19 @@ function ModelPicker({
             <div key={group.provider} className="mp-provider">
               <p className="mp-group">
                 {group.label}
+                {/* Where the prompt goes is a property of the model, not of a
+                    settings page the user visited once. A local entry says so
+                    at the moment of choosing. */}
+                {group.provider === 'ollama' && (
+                  <span className="mp-local" title="Runs on your machine — prompts never leave your computer">
+                    local
+                  </span>
+                )}
+                {group.provider === 'ollama_remote' && (
+                  <span className="mp-remote" title="Routed through StateJar's server">
+                    remote
+                  </span>
+                )}
                 <span className="mp-note">
                   {group.error
                     ? 'unavailable'
@@ -602,6 +616,7 @@ export default function Playground() {
   const [state, setState] = useState(null)          // current memory state
   const [handle, setHandle] = useState(null)
   const [extractionTiers, setExtractionTiers] = useState({})
+  const [reliefOpen, setReliefOpen] = useState(false)
   const [tierNotice, setTierNotice] = useState('')
   const [extractionSource, setExtractionSource] = useState(null)  // ["rules","gliner2",…]
   const [extractionOrigins, setExtractionOrigins] = useState({})  // "facts.name" -> tier
@@ -1365,11 +1380,26 @@ export default function Playground() {
       )}
       <Pipeline stages={pipe.stages} travelling={pipe.travelling} />
 
+      {reliefOpen && (
+        <ReliefDemo
+          onState={setState}
+          onHandle={setHandle}
+          onClose={() => setReliefOpen(false)}
+        />
+      )}
+
       <div className="pg-cols">
       <div className="pg-chat" ref={chatRef}>
         <div className="pg-toolbar">
-          <button className="btn btn-primary pg-mini demo-btn" onClick={startDemo} disabled={locked}>
-            {demoRunning ? 'Demo running…' : '▶ Run instant demo'}
+          <button
+            className="btn btn-primary pg-mini demo-btn"
+            onClick={() => setReliefOpen((v) => !v)}
+            disabled={demoRunning}
+          >
+            {reliefOpen ? '✕ Close demo' : '▶ Run 17-turn demo'}
+          </button>
+          <button className="btn btn-ghost pg-mini" onClick={startDemo} disabled={locked}>
+            {demoRunning ? 'Demo running…' : 'Short demo'}
           </button>
           <select
             value={session} disabled={demoRunning}

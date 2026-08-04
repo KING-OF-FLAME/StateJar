@@ -177,7 +177,9 @@ OLLAMA_PREFIX = "ollama/"
 # sent upstream. Anything else — "meta-llama/…", "google/…", a bare id — is
 # an OpenRouter id and travels unchanged, which is why OpenRouter is absent
 # from this set: it is the default, not a prefix to strip.
-ROUTING_PREFIXES: frozenset[str] = frozenset({"openai", "anthropic", "gemini", "ollama"})
+ROUTING_PREFIXES: frozenset[str] = frozenset({
+    "openai", "anthropic", "gemini", "ollama", "ollama_remote",
+})
 
 
 def route_model(model: str, provider: str = "openrouter") -> tuple[str, str]:
