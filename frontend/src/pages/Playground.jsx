@@ -1667,7 +1667,20 @@ export default function Playground() {
             </div>
           )}
           {(isPending(session) || typing) && (
-            <div className="pg-msg assistant"><div className="pg-bubble pg-typing">···</div></div>
+            <div className="pg-msg assistant">
+              {/* Generic, and deliberately so. There is no stage channel from
+                  the backend — no streaming, no SSE — so the only honest
+                  options were "something is happening" or a setTimeout
+                  pretending to walk the pipeline. On a product whose claim is
+                  determinism, an invented progress bar would be a lie told by
+                  the one component users watch most. The real strip above
+                  fills in from real responses. */}
+              <div className="pg-bubble pg-typing" role="status" aria-live="polite">
+                <span className="pg-dots" aria-hidden="true"><i /><i /><i /></span>
+                <span className="pg-typing-label">Working</span>
+                <span className="pg-typing-sweep" aria-hidden="true" />
+              </div>
+            </div>
           )}
           <div ref={chatEndRef} />
         </div>

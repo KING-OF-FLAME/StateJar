@@ -948,7 +948,47 @@ footer {
   padding: 6px 14px; cursor: pointer;
 }
 .retry-btn:hover { background: #C0442A; color: #fff; }
-.pg-typing { color: var(--ink-faint); letter-spacing: 3px; }
+/* Pending indicator. CSS only — no timers, no animation dependency, and no
+   claim about which pipeline stage is running, because the backend exposes no
+   stage channel to know. It says "alive", not "43% through EXTRACT". */
+.pg-typing {
+  display: inline-flex; align-items: center; gap: 9px;
+  position: relative; overflow: hidden;
+  color: var(--ink-faint); letter-spacing: normal;
+}
+.pg-dots { display: inline-flex; gap: 4px; align-items: center; }
+.pg-dots i {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent); opacity: 0.3;
+  animation: pg-dot 1.3s ease-in-out infinite;
+}
+.pg-dots i:nth-child(2) { animation-delay: 0.17s; }
+.pg-dots i:nth-child(3) { animation-delay: 0.34s; }
+@keyframes pg-dot {
+  0%, 62%, 100% { opacity: 0.26; transform: translateY(0); }
+  31%           { opacity: 1;    transform: translateY(-3px); }
+}
+.pg-typing-label { font-size: 0.83rem; }
+.pg-typing-label::after {
+  content: '…'; display: inline-block; width: 1.1ch; text-align: left;
+  animation: pg-ellipsis 1.4s steps(4, end) infinite;
+}
+@keyframes pg-ellipsis { 0% { clip-path: inset(0 100% 0 0); } 100% { clip-path: inset(0 0 0 0); } }
+/* one slow sweep, so a wait measured in seconds still reads as running */
+.pg-typing-sweep {
+  position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(100deg,
+    transparent 20%, rgba(224, 120, 86, 0.13) 50%, transparent 80%);
+  transform: translateX(-100%);
+  animation: pg-sweep 2.1s ease-in-out infinite;
+}
+@keyframes pg-sweep { to { transform: translateX(100%); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .pg-dots i { animation: none; opacity: 0.65; transform: none; }
+  .pg-typing-label::after { animation: none; clip-path: none; }
+  .pg-typing-sweep { display: none; }
+}
 .pg-input { display: flex; gap: 10px; margin-top: 14px; }
 .pg-input input {
   flex: 1; font-family: var(--sans); font-size: 0.95rem;
