@@ -99,7 +99,16 @@ export function usePipeline() {
     }, entries.length * gap))
   }, [])
 
-  return { stages, travelling, reset, begin, complete }
+  /* Put the strip back exactly as a previous turn left it, with no reveal
+     stagger — a rehydrated session is showing history, not a live run, and
+     replaying the animation would claim stages are happening now. */
+  const restore = useCallback((saved) => {
+    clearTimers()
+    setTravelling(null)
+    setStages(saved && typeof saved === 'object' ? { ...IDLE, ...saved } : IDLE)
+  }, [clearTimers])
+
+  return { stages, travelling, reset, begin, complete, restore }
 }
 
 function Payload({ data }) {

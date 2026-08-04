@@ -91,10 +91,21 @@ def _raise_for(status: int | None, detail: str, provider: str, model: str) -> No
         raise ProviderError(
             f"{provider} rate limit reached — wait a moment and try again. ({detail})"
         )
-    if re.search(r"model|not.?found|does not exist", detail, re.I) and (
+    # A path-not-found is not a model-not-found. Ollama answers a wrong base
+    # URL with `path "/api/api/tags" not found`, and reporting that as an
+    # unknown model sent people looking in entirely the wrong place.
+    if status == 404 and re.search(r'path\s+"?/', detail):
+        raise ProviderError(
+            f"{provider}: no API at that address — check the base URL. ({detail})"
+        )
+    if model and re.search(r"model|not.?found|does not exist", detail, re.I) and (
         status in (400, 404, None)
     ):
         raise ProviderError(f"{provider} does not recognise the model '{model}'. ({detail})")
+    if status == 404:
+        raise ProviderError(
+            f"{provider}: nothing found at that address — check the base URL. ({detail})"
+        )
     if status is None:
         raise ProviderError(f"{provider} error: {detail}")
     raise ProviderError(f"{provider} error (HTTP {status}): {detail}")
@@ -545,6 +556,20 @@ class OllamaProvider(LLMProvider):
         # read per call so a redeploy / test can repoint the daemon
         return get_settings().ollama_base_url.rstrip("/")
 
+    # Ollama's own docs write the cloud endpoint as `https://ollama.com/api/chat`
+    # and the OpenAI-compatible one as `http://localhost:11434/v1/`, so a user
+    # copying from the docs naturally pastes a base that already carries the
+    # path. Appending `/api/chat` to that produced `/api/api/chat`, which the
+    # real service answers with `path "/api/api/tags" not found` — verified
+    # against ollama.com. Both forms are accepted and normalised to the host.
+    _PATH_SUFFIX = re.compile(r"/(?:api|v1)/?$", re.IGNORECASE)
+
+    @staticmethod
+    def normalise_base(url: str) -> str:
+        """A pasted base URL, with any trailing /api or /v1 removed."""
+        trimmed = (url or "").strip().rstrip("/")
+        return OllamaProvider._PATH_SUFFIX.sub("", trimmed).rstrip("/")
+
     @staticmethod
     def parse_config(stored: str | None) -> tuple[str, str]:
         """(base_url_override, api_key) from whatever is saved for this user.
@@ -571,7 +596,7 @@ class OllamaProvider(LLMProvider):
 
     def _resolve_base(self, override: str | None) -> str:
         candidate, _ = self.parse_config(override)
-        candidate = candidate.rstrip("/")
+        candidate = self.normalise_base(candidate)
         return candidate if candidate.startswith(("http://", "https://")) else self.base_url
 
     def _headers(self, stored: str | None) -> dict[str, str]:
@@ -627,6 +652,8 @@ class OllamaProvider(LLMProvider):
                 f"Ollama not reachable at {base_url} — is `ollama serve` running?"
             ) from exc
         _check(response, self.label, "", None)
+        _, api_key = self.parse_config(api_key)
+        data = _body(response, self.label, "", api_key or None)
         return [
             {
                 "id": m["name"],
@@ -634,7 +661,7 @@ class OllamaProvider(LLMProvider):
                 "context_length": None,
                 "is_free": True,  # local inference costs nothing
             }
-            for m in (response.json().get("models") or [])
+            for m in (data.get("models") or [])
             if m.get("name")
         ]
 
@@ -664,7 +691,7 @@ class OllamaRemoteProvider(OllamaProvider):
 
     def _resolve_base(self, override: str | None) -> str:
         candidate, _ = self.parse_config(override)
-        candidate = candidate.rstrip("/")
+        candidate = self.normalise_base(candidate)
         if not candidate.startswith(("http://", "https://")):
             raise ProviderError(
                 "No remote Ollama host configured — add the base URL on the "

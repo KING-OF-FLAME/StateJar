@@ -1,5 +1,6 @@
 import { Link, NavLink, Navigate, Outlet, useNavigate } from 'react-router-dom'
 import { isAuthed, setToken } from '../lib/api.js'
+import { clearAll } from '../lib/transcript.js'
 
 const NAV = [
   { to: '/dashboard', label: 'Dashboard', icon: '◧' },
@@ -13,7 +14,12 @@ export default function Layout() {
   const navigate = useNavigate()
   if (!isAuthed()) return <Navigate to="/login" replace />
 
+  /* Transcripts live only in this browser, so logging out is the only moment
+     StateJar can clear them — and it must, or a shared machine hands the next
+     person the last person's conversation. Memory state is unaffected: it is
+     on the server, keyed to the account, and comes back on the next login. */
   const logout = () => {
+    clearAll()
     setToken(null)
     navigate('/login')
   }

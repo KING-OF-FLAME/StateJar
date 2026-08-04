@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.apikeys import get_api_caller
@@ -15,12 +16,12 @@ from app.auth.routes import UserOut
 from app.database import get_db
 from app.llm import gateway
 from app.llm.providers import ProviderError
-from app.memory.audit import AuditLogger
+from app.memory.audit import AuditLogger, audit_logs
 from app.memory.canonicalizer import NORM_VERSION, SCHEMA_VERSION, canonicalize
 from app.memory.extractor import extract
 from app.memory.handle import generate_handle
 from app.memory.retriever import retrieve_minimum
-from app.memory.storage import MemoryStore
+from app.memory.storage import MemoryStore, memory_states
 from app.memory.versioning import UNHASHED_KEYS, evolve_state, initial_state
 from app.schema import canonical as canon
 from app.security import CHAT_LIMIT, limiter, user_or_ip
@@ -449,6 +450,77 @@ def versions(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     return {"session_tag": session_tag, "versions": _store(db).list_versions(user.id, session_tag)}
+
+
+@router.get("/sessions/{session_tag}/turns")
+def session_turns(
+    session_tag: str,
+    user: UserOut = Depends(get_api_caller),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Per-turn provenance for a session. Deliberately contains no message text.
+
+    A transcript endpoint would have to store the conversation, and StateJar
+    does not: raw transcripts are never stored or sent (patent module 5, and
+    `storage._assert_no_transcript` refuses them at write time). What the
+    server legitimately knows is what it *did* on each turn — which handle was
+    current, which fields were disclosed, to which model — and that is what
+    this returns.
+
+    The client holds the words; the server holds the provenance. Joining them
+    is the caller's job, which is exactly the separation the claim describes.
+    """
+    rows = db.execute(
+        select(
+            memory_states.c.handle,
+            memory_states.c.parent_handle,
+            memory_states.c.created_at,
+            memory_states.c.state_version,
+        )
+        .where(memory_states.c.user_id == user.id)
+        .where(memory_states.c.session_tag == session_tag)
+        .order_by(memory_states.c.created_at.asc(), memory_states.c.id.asc())
+    ).mappings().all()
+
+    # every disclosure made from each handle, so a turn can show what was sent
+    disclosures: dict[str, list[dict[str, Any]]] = {}
+    for row in db.execute(
+        select(
+            audit_logs.c.handle_used,
+            audit_logs.c.subset_keys,
+            audit_logs.c.provider,
+            audit_logs.c.model,
+            audit_logs.c.request_id,
+            audit_logs.c.created_at,
+        )
+        .where(audit_logs.c.user_id == user.id)
+        .where(audit_logs.c.session_tag == session_tag)
+        .order_by(audit_logs.c.id.asc())
+    ).mappings():
+        disclosures.setdefault(row["handle_used"] or "", []).append({
+            "request_id": row["request_id"],
+            "subset_keys": row["subset_keys"] or [],
+            "provider": row["provider"],
+            "model": row["model"],
+            "at": iso_utc(row["created_at"]),
+        })
+
+    turns = [
+        {
+            "turn": i,
+            "handle": row["handle"],
+            "parent_handle": row["parent_handle"],
+            "state_version": row["state_version"],
+            "at": iso_utc(row["created_at"]),
+            "disclosures": disclosures.get(row["handle"], []),
+        }
+        for i, row in enumerate(rows, 1)
+    ]
+    return {
+        "session_id": session_tag,
+        "turns": turns,
+        "contains_message_text": False,
+    }
 
 
 @router.get("/audit/{request_id}/replay")

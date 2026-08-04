@@ -367,3 +367,72 @@ def test_plain_query_writes_no_audit(client: TestClient, headers: dict[str, str]
         "/api/v1/audit?session_tag=demo-3", headers=headers
     ).json()["entries"]
     assert trail == []
+
+
+def test_session_turns_is_provenance_without_message_text(
+    client: TestClient, headers: dict[str, str]
+) -> None:
+    """The session-history endpoint must never become a transcript store.
+
+    The client keeps the words; this endpoint answers "what did the server do
+    on each turn" so a restored transcript can be re-attached to its handles.
+    """
+    for text in ("My budget is 5000 rupees.", "Push the deadline to March 3."):
+        client.post(
+            "/api/v1/memory/ingest",
+            json={"session_tag": "turns-1", "text": text},
+            headers=headers,
+        )
+    client.post(
+        "/api/v1/memory/query",
+        json={"session_tag": "turns-1", "query": "What's the budget?",
+              "audit": True},
+        headers=headers,
+    )
+
+    r = client.get("/api/v1/sessions/turns-1/turns", headers=headers)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["session_id"] == "turns-1"
+    assert body["contains_message_text"] is False
+
+    turns = body["turns"]
+    assert len(turns) == 2
+    assert [t["turn"] for t in turns] == [1, 2]
+    assert turns[0]["parent_handle"] is None
+    assert turns[1]["parent_handle"] == turns[0]["handle"]
+    assert turns[1]["state_version"] == 2
+
+    # the disclosure made from the newest handle is attached to its turn
+    assert turns[1]["disclosures"], "audited query should attach to its handle"
+    assert turns[1]["disclosures"][0]["provider"] == "demo"
+    assert turns[1]["disclosures"][0]["subset_keys"]
+
+    # no field anywhere carries what the user actually typed
+    blob = json.dumps(body)
+    assert "budget is 5000" not in blob
+    assert "Push the deadline" not in blob
+
+
+def test_session_turns_never_crosses_sessions_or_users(
+    client: TestClient, headers: dict[str, str]
+) -> None:
+    client.post(
+        "/api/v1/memory/ingest",
+        json={"session_tag": "turns-a", "text": INGEST_TEXT},
+        headers=headers,
+    )
+    client.post("/api/v1/auth/signup",
+                json={"email": "turns@example.com", "password": "s3cretpass"})
+    other = client.post("/api/v1/auth/login",
+                        json={"email": "turns@example.com",
+                              "password": "s3cretpass"}).json()["access_token"]
+
+    assert client.get("/api/v1/sessions/turns-a/turns",
+                      headers=headers).json()["turns"]
+    assert client.get("/api/v1/sessions/turns-b/turns",
+                      headers=headers).json()["turns"] == []
+    assert client.get(
+        "/api/v1/sessions/turns-a/turns",
+        headers={"Authorization": f"Bearer {other}"},
+    ).json()["turns"] == []

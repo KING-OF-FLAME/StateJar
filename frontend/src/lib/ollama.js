@@ -13,8 +13,13 @@
 
 export const DEFAULT_OLLAMA_URL = 'http://localhost:11434'
 
+/* Ollama's own docs write the cloud endpoint as `https://ollama.com/api/chat`
+   and the OpenAI-compatible one as `http://localhost:11434/v1/`, so a user
+   copying from the docs pastes a base that already carries the path. Appending
+   `/api/tags` to that gave `/api/api/tags`, which the real service answers
+   with `path "/api/api/tags" not found`. Both forms normalise to the host. */
 export function normaliseBase(url) {
-  const trimmed = (url || '').trim().replace(/\/+$/, '')
+  const trimmed = (url || '').trim().replace(/\/+$/, '').replace(/\/(?:api|v1)$/i, '')
   return trimmed || DEFAULT_OLLAMA_URL
 }
 

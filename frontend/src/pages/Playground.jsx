@@ -8,6 +8,9 @@ import Pipeline, { canonicalPreview, countFields, usePipeline } from '../compone
 import {
   chatLocal, classifyError, isLocalHost, listLocalModels, normaliseBase,
 } from '../lib/ollama.js'
+import {
+  clearSession, loadActiveSession, loadSession, saveActiveSession, saveSession,
+} from '../lib/transcript.js'
 
 const CUSTOM_MODEL = '__custom__'
 const OLLAMA_PREFIX = 'ollama/'
@@ -594,7 +597,11 @@ function ModelPicker({
 export default function Playground() {
   const [sessions, setSessions] = useState(() =>
     JSON.parse(localStorage.getItem('statejar_sessions') || '["session-1"]'))
-  const [session, setSession] = useState(sessions[0])
+  // A reload returns to the session you were in, not to sessions[0].
+  const [session, setSession] = useState(() => loadActiveSession(sessions))
+  // One read of that session's stored snapshot, shared by the initialisers
+  // below so a reload paints the restored screen on its first frame.
+  const [boot] = useState(() => loadSession(session))
   const [groups, setGroups] = useState([])   // [{provider, label, free, paid, error?}]
   const [modelChoice, setModelChoice] = useState(
     () => localStorage.getItem('statejar_model') || '')
@@ -606,7 +613,9 @@ export default function Playground() {
   const [customProvider, setCustomProvider] = useState(
     () => localStorage.getItem('statejar_custom_provider') || 'openrouter')
   const [auditScope, setAuditScope] = useState('session')
-  const [messages, setMessages] = useState([])
+  // Seeded from storage rather than left empty for the [session] effect to
+  // fill, so a reload never flashes a blank transcript before restoring it.
+  const [messages, setMessages] = useState(boot.messages)
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [typing, setTyping] = useState(false)       // demo typing indicator
@@ -615,14 +624,18 @@ export default function Playground() {
   const [tab, setTab] = useState(0)
   const [state, setState] = useState(null)          // current memory state
   const [handle, setHandle] = useState(null)
-  const [extractionTiers, setExtractionTiers] = useState({})
+  /* The run panels are seeded from the same snapshot as the transcript.
+     They belong to a session's last turn, so restoring one without the others
+     would show this session's messages beside another session's run — which
+     is worse than showing nothing. */
+  const [extractionTiers, setExtractionTiers] = useState(boot.ui?.tiers || {})
   const [reliefOpen, setReliefOpen] = useState(false)
-  const [tierNotice, setTierNotice] = useState('')
-  const [extractionSource, setExtractionSource] = useState(null)  // ["rules","gliner2",…]
-  const [extractionOrigins, setExtractionOrigins] = useState({})  // "facts.name" -> tier
+  const [tierNotice, setTierNotice] = useState(boot.ui?.notice || '')
+  const [extractionSource, setExtractionSource] = useState(boot.ui?.source || null)  // ["rules","gliner2",…]
+  const [extractionOrigins, setExtractionOrigins] = useState(boot.ui?.origins || {})  // "facts.name" -> tier
   const [changed, setChanged] = useState(null)      // dotted paths updated by last ingest
   const [copied, setCopied] = useState(false)
-  const [retrieved, setRetrieved] = useState(null)  // last query subset + metadata
+  const [retrieved, setRetrieved] = useState(boot.ui?.retrieved || null)  // last query subset + metadata
   const [versions, setVersions] = useState([])
   const [inspected, setInspected] = useState(null)  // old state being inspected
   const [audit, setAudit] = useState([])
@@ -648,6 +661,8 @@ export default function Playground() {
   // (not a boolean) so the [session] effect stays idempotent — a consumed
   // flag would let StrictMode's second effect pass wipe the first message.
   const keepForRef = useRef(null)
+  // Which session the transcript currently in `messages` belongs to.
+  const savedForRef = useRef(session)
 
   const persistSessions = (list) => {
     setSessions(list)
@@ -756,6 +771,10 @@ export default function Playground() {
 
   const newSession = () => {
     const tag = `session-${sessions.length + 1}`
+    // Tags are positional, so one can be reused after the session list is
+    // cleared. A new session must start empty, never inherit a namesake's
+    // stored transcript.
+    clearSession(tag)
     persistSessions([...sessions, tag])
     switchSession(tag)
   }
@@ -791,13 +810,26 @@ export default function Playground() {
     await Promise.all([refreshVersions(tag), fetchAudit(tag, auditScope)])
   }
 
-  // load state when switching sessions
+  /* Load a session: its state from the server, its transcript and run panels
+     from this browser.
+
+     Everything that belongs to a turn is swapped together — transcript, tier
+     chips, per-field origins, the pipeline strip and the last retrieval. The
+     panels used to survive a switch untouched, so session B showed session A's
+     run; leaving any one of them behind reintroduces exactly that. */
   useEffect(() => {
     setInspected(null)
     setChanged(null)
+    saveActiveSession(session)
     if (keepForRef.current !== session) {
-      setMessages([])
-      setRetrieved(null)
+      const saved = loadSession(session)
+      setMessages(saved.messages)
+      setRetrieved(saved.ui?.retrieved || null)
+      setExtractionSource(saved.ui?.source || null)
+      setExtractionOrigins(saved.ui?.origins || {})
+      setExtractionTiers(saved.ui?.tiers || {})
+      setTierNotice(saved.ui?.notice || '')
+      pipe.restore(saved.ui?.stages)
     }
     api(`/memory/versions?session_tag=${encodeURIComponent(session)}`)
       .then(async (v) => {
@@ -816,6 +848,34 @@ export default function Playground() {
       })
       .catch(() => {})
   }, [session])
+
+  /* Persist the transcript and its run panels for the active session.
+
+     The guard matters. On the render where `session` has flipped but the
+     loader's setState has not landed yet, `messages` still belongs to the
+     session being left — writing it here would file the old conversation
+     under the new tag. Skipping that one run is safe: the loader replaces the
+     transcript with a fresh array, which re-renders and runs this again with
+     values that match. */
+  useEffect(() => {
+    if (savedForRef.current !== session) {
+      savedForRef.current = session
+      if (keepForRef.current !== session) return
+    }
+    if (session.startsWith('demo-')) return   // scripted and regenerable
+    saveSession(session, {
+      messages,
+      ui: {
+        retrieved,
+        source: extractionSource,
+        origins: extractionOrigins,
+        tiers: extractionTiers,
+        notice: tierNotice,
+        stages: pipe.stages,
+      },
+    })
+  }, [session, messages, retrieved, extractionSource, extractionOrigins,
+      extractionTiers, tierNotice, pipe.stages])
 
   // audit trail follows the active session and the This session / All toggle
   useEffect(() => {
