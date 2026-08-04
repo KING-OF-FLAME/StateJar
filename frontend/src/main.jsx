@@ -14,6 +14,8 @@ const Playground = lazy(() => import('./pages/Playground.jsx'))
 const ApiKeys = lazy(() => import('./pages/ApiKeys.jsx'))
 const ApiDocs = lazy(() => import('./pages/ApiDocs.jsx'))
 const AuditLog = lazy(() => import('./pages/AuditLog.jsx'))
+const About = lazy(() => import('./pages/About.jsx'))
+const Help = lazy(() => import('./pages/Help.jsx'))
 
 const Loading = () => <p className="empty-note">Loading…</p>
 
@@ -30,6 +32,8 @@ ReactDOM.createRoot(document.getElementById('root')).render(
           <Route path="/api-keys" element={<Suspense fallback={<Loading />}><ApiKeys /></Suspense>} />
           <Route path="/api-docs" element={<Suspense fallback={<Loading />}><ApiDocs /></Suspense>} />
           <Route path="/audit" element={<Suspense fallback={<Loading />}><AuditLog /></Suspense>} />
+          <Route path="/about" element={<Suspense fallback={<Loading />}><About /></Suspense>} />
+          <Route path="/help" element={<Suspense fallback={<Loading />}><Help /></Suspense>} />
         </Route>
       </Routes>
     </BrowserRouter>

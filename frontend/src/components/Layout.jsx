@@ -8,6 +8,8 @@ const NAV = [
   { to: '/api-keys', label: 'API Keys', icon: '⚿' },
   { to: '/api-docs', label: 'API Docs', icon: '❯' },
   { to: '/audit', label: 'Audit Log', icon: '≡' },
+  { to: '/about', label: 'About', icon: '◇' },
+  { to: '/help', label: 'Help', icon: '?' },
 ]
 
 export default function Layout() {

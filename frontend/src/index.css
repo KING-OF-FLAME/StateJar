@@ -1620,3 +1620,145 @@ body.presenter-mode .card, body.presenter-mode .panel { border-color: #D8D2C8; }
 .rd-end-note { color: #8A6D1D; }
 .rd-end-handle code { font-size: 0.72rem; word-break: break-all; }
 .rd-end-hint { display: block; color: var(--ink-faint); font-size: 0.7rem; margin-top: 2px; }
+
+/* ---------- About ---------- */
+.about-page { max-width: 900px; padding-bottom: 64px; }
+.about-hero { padding: 8px 0 28px; }
+.about-one-liner {
+  font-size: clamp(1.5rem, 3.4vw, 2.25rem); line-height: 1.25;
+  margin-top: 10px; max-width: 30ch;
+}
+.about-block { padding: 30px 0; border-top: 1px solid var(--line); }
+.about-block h2 { font-size: clamp(1.25rem, 2.4vw, 1.65rem); margin-bottom: 14px; }
+.about-block h3 { font-size: 1.02rem; font-family: var(--sans); font-weight: 600; margin-bottom: 6px; }
+.about-block p { color: var(--ink-soft); margin-bottom: 12px; }
+.about-sub { color: var(--ink-faint); margin-top: -6px; }
+.about-emphasis {
+  border-left: 3px solid var(--accent); padding-left: 16px;
+  color: var(--ink); font-size: 1.03rem;
+}
+.about-note { font-size: 0.92rem; color: var(--ink-faint); }
+
+.about-guarantees { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
+.about-guarantee { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
+.about-guarantee p { font-size: 0.93rem; margin-bottom: 0; }
+
+.about-pipeline { list-style: none; display: grid; gap: 10px; margin: 8px 0 16px; }
+.about-stage {
+  display: grid; grid-template-columns: 28px 132px minmax(0, 1fr); gap: 12px; align-items: baseline;
+  background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px;
+}
+.about-stage-n { color: var(--accent); font-size: 0.82rem; }
+.about-stage-name { font-weight: 600; }
+.about-stage-line { color: var(--ink-soft); font-size: 0.92rem; }
+
+.about-domains { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); margin-bottom: 14px; }
+.about-domain { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px; min-width: 0; }
+.about-domain p { margin-bottom: 6px; }
+.about-domain-tag { font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); }
+.about-domain-said { color: var(--ink); font-size: 0.93rem; }
+.about-domain-stored { font-size: 0.78rem; color: var(--green); overflow-wrap: anywhere; }
+.about-domain-value { font-size: 0.78rem; color: var(--ink-faint); margin-bottom: 0 !important; }
+
+.about-status { list-style: none; display: grid; gap: 10px; }
+.about-status li { color: var(--ink-soft); padding-left: 18px; position: relative; }
+.about-status li::before { content: "\00B7"; position: absolute; left: 4px; color: var(--accent); font-weight: 700; }
+
+.about-gaps .about-gap {
+  border-left: 2px solid var(--line); padding: 2px 0 2px 16px; margin-bottom: 16px;
+}
+.about-gaps .about-gap p { font-size: 0.93rem; margin-bottom: 0; }
+.about-cta { border-bottom: 1px solid var(--line); }
+
+/* ---------- Help centre ---------- */
+.help-page { padding-bottom: 64px; }
+.help-head { padding-bottom: 20px; border-bottom: 1px solid var(--line); }
+.help-lede { color: var(--ink-soft); margin: 8px 0 18px; max-width: 62ch; }
+.help-search { position: relative; max-width: 560px; }
+.help-search input {
+  width: 100%; padding: 11px 40px 11px 14px; font: inherit; font-size: 0.95rem;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--ink);
+}
+.help-search input:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+.help-search-hint {
+  position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
+  font-size: 0.72rem; color: var(--ink-faint); border: 1px solid var(--line);
+  border-radius: 4px; padding: 1px 6px; pointer-events: none;
+}
+
+.help-cols { display: grid; grid-template-columns: 232px minmax(0, 1fr); gap: 34px; align-items: start; }
+.help-toc { position: sticky; top: 18px; max-height: calc(100vh - 40px); overflow-y: auto; padding-right: 6px; min-width: 0; }
+.help-toc-group { margin-bottom: 18px; }
+.help-toc-head {
+  font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--accent); margin-bottom: 6px;
+}
+.help-toc ul { list-style: none; display: grid; gap: 2px; }
+.help-toc a {
+  display: block; font-size: 0.86rem; color: var(--ink-soft); text-decoration: none;
+  padding: 3px 8px; border-radius: 6px; line-height: 1.35; overflow-wrap: anywhere;
+}
+.help-toc a:hover { background: rgba(224, 120, 86, 0.08); color: var(--ink); }
+
+.help-main { min-width: 0; }
+.help-cat-head {
+  font-size: 1.35rem; margin: 26px 0 12px; padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+.help-section:first-child .help-cat-head { margin-top: 8px; }
+
+.help-entry {
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+  padding: 20px; margin-bottom: 16px; scroll-margin-top: 18px; min-width: 0;
+}
+.help-entry.help-flash { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.help-entry-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+/* Titles include things like EXTRACTOR_LLM_FALLBACK_MODELS: one token wider
+   than a phone, and nothing in it for the browser to break on. */
+.help-entry-head h3 { font-size: 1.12rem; overflow-wrap: anywhere; min-width: 0; }
+.help-anchor { font-size: 0.72rem; color: var(--ink-faint); text-decoration: none; overflow-wrap: anywhere; }
+.help-anchor:hover { color: var(--accent); }
+/* Summaries quote defaults verbatim, and a default can be a URL or a DSN
+   with no break opportunity in it. */
+.help-summary { color: var(--ink-faint); font-size: 0.9rem; margin: 6px 0 12px; overflow-wrap: anywhere; }
+.help-body { color: var(--ink-soft); font-size: 0.94rem; }
+.help-body p, .help-body ul, .help-body ol { margin-bottom: 12px; }
+.help-body ul, .help-body ol { padding-left: 20px; }
+.help-body li { margin-bottom: 4px; }
+.help-body h2, .help-body h3 { font-family: var(--sans); font-size: 1rem; font-weight: 600; color: var(--ink); margin: 16px 0 8px; }
+.help-body strong { color: var(--ink); }
+.help-body a, .help-xref { color: var(--accent); text-decoration: none; border-bottom: 1px solid var(--accent-soft); }
+.help-body a:hover { border-bottom-color: var(--accent); }
+.help-code { font-family: var(--mono); font-size: 0.85em; background: var(--accent-soft); padding: 1px 5px; border-radius: 4px; color: var(--ink); overflow-wrap: anywhere; }
+.help-pre {
+  font-family: var(--mono); font-size: 0.82rem; background: var(--bg);
+  border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px;
+  overflow-x: auto; margin-bottom: 12px; white-space: pre; max-width: 100%;
+}
+/* a fenced block owns its own chrome; the code inside it is plain */
+.help-pre .help-code { background: none; padding: 0; font-size: 1em; }
+.help-table-wrap { overflow-x: auto; margin-bottom: 12px; max-width: 100%; }
+.help-table-wrap table { border-collapse: collapse; font-size: 0.88rem; min-width: 100%; }
+.help-table-wrap th, .help-table-wrap td { border: 1px solid var(--line); padding: 7px 10px; text-align: left; vertical-align: top; }
+.help-table-wrap th { background: var(--bg); font-weight: 600; color: var(--ink); white-space: nowrap; }
+.help-updated { font-size: 0.72rem; color: var(--ink-faint); margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--line); }
+
+.help-results-count { color: var(--ink-faint); font-size: 0.88rem; margin: 8px 0 14px; }
+.help-result {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; width: 100%; text-align: left;
+  background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+  padding: 13px 16px; margin-bottom: 8px; cursor: pointer; font: inherit;
+}
+.help-result:hover { border-color: var(--accent); }
+.help-result-title { font-weight: 600; color: var(--ink); }
+.help-result-cat { font-size: 0.7rem; color: var(--ink-faint); text-transform: uppercase; letter-spacing: 0.06em; }
+.help-result-summary { grid-column: 1 / -1; font-size: 0.87rem; color: var(--ink-soft); }
+.help-foot { margin-top: 24px; font-size: 0.85rem; color: var(--ink-faint); }
+
+@media (max-width: 860px) {
+  .help-cols { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+  .help-toc { position: static; max-height: none; border-bottom: 1px solid var(--line); padding-bottom: 12px; }
+  .help-toc ul { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); }
+  .about-stage { grid-template-columns: 24px minmax(0, 1fr); }
+  .about-stage-line { grid-column: 2; }
+}
