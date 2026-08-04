@@ -8,6 +8,10 @@
 *.key
 *.p12
 secrets.json
+
+# Claude
+CLAUDE.md
+
 # local scratch scripts that may hold a real credential while debugging
 scratch/
 *.local.sh

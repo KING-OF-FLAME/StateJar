@@ -10,6 +10,12 @@ const NAV = [
   { to: '/audit', label: 'Audit Log', icon: '≡' },
   { to: '/about', label: 'About', icon: '◇' },
   { to: '/help', label: 'Help', icon: '?' },
+  // Account management rather than a product surface, so it sits at the bottom
+  // with Help and Logout. It was reachable only from the marketing header's
+  // account menu, which meant the way to your own profile was to leave the
+  // console — see tests/test_nav_coverage.py, which now fails the build if an
+  // authenticated route has no link into it.
+  { to: '/profile', label: 'Profile', icon: '☺' },
 ]
 
 /* Pages a visitor can read before deciding to sign up.

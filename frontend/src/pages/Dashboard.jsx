@@ -20,10 +20,20 @@ export default function Dashboard() {
   const [stats, setStats] = useState(null)
   const [usage, setUsage] = useState(null)
   const [error, setError] = useState('')
+  /* undefined = still asking, '' = asked and there is no name to show.
+     The distinction matters: rendering the fallback copy while the request is
+     still out, then swapping in a name, is the flash this avoids. The heading
+     holds the generic line until the answer is known either way. */
+  const [name, setName] = useState(undefined)
 
   useEffect(() => {
     api('/memory/stats').then(setStats).catch((e) => setError(e.message))
     api('/usage').then(setUsage).catch(() => {}) // secondary panel: never blocks the page
+    // Never blocks the page either: an empty profile and a failed request are
+    // the same thing to a heading, and neither is worth an error banner.
+    api('/profile')
+      .then((p) => setName((p?.display_name || '').trim()))
+      .catch(() => setName(''))
   }, [])
 
   const num = (v) => (v == null ? '—' : v.toLocaleString())
@@ -32,7 +42,15 @@ export default function Dashboard() {
     <>
       <div className="page-head">
         <div>
-          <h1>Dashboard</h1>
+          {/* Three states, not two. Rendering the fallback while the request
+              is still out and then swapping in a name is a visible flash --
+              measured on first paint, the heading went "Dashboard" then
+              "Welcome back, ...". So while the answer is unknown the heading
+              holds its space and says nothing; it commits once, to whichever
+              is true. The rest of the page never waits on it. */}
+          {name === undefined
+            ? <h1 className="dash-h1-pending" aria-hidden="true">&nbsp;</h1>
+            : <h1>{name ? `Welcome back, ${name}` : 'Dashboard'}</h1>}
           <p className="page-sub">Your deterministic memory at a glance.</p>
         </div>
         <Link className="btn btn-primary" to="/playground">Open Playground</Link>
