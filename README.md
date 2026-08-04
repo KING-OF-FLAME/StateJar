@@ -409,20 +409,44 @@ the fields it needs.
 
 ---
 
-## 🧭 Roadmap (Round 2)
+## 🧭 Round 2 status
 
-- ✅ **Multi-provider gateway** — *shipped.* Native OpenAI, Anthropic, Gemini and
-  Ollama alongside OpenRouter. Save a key per provider on **API Keys**; each
-  provider's live catalog is fetched with your own key and grouped in the model
-  picker, and any custom model id passes through unwhitelisted.
-- ✅ **Benchmark suite** — *shipped.* See [Benchmark](#benchmark).
-- ✅ **Audit-log UI** — *shipped.* Provenance timeline with per-entry replay.
-- **GLiNER2 in production** — the code ships and is env-gated via
-  `EXTRACTOR_MODE`, but its `gliner`/`torch` dependencies are deliberately not
-  installed on Railway, so deployed extraction is rules only today.
-- **Tier 3 (LLM extraction) exercised in production** — implemented, off by
-  default, and never yet run on the deployed instance.
-- Org/team workspaces, handle export API
+Built by opening the code for each item, not from a plan. **Shipped** means
+implemented, reachable from the UI or API, and covered by a test — all three.
+Anything short of that is Partial or Not started, with what is missing named.
+
+The reachability bar is there for a reason: `/profile` shipped working, tested,
+and unreachable — no link anywhere in the console pointed at it — and 700 green
+tests said nothing, because none of them asked how a user gets there. There is
+now a test that does (`backend/tests/test_nav_coverage.py`).
+
+| Item | Status | Evidence / what is missing |
+|---|---|---|
+| **Multi-provider gateway** | ✅ Shipped | 6 providers in `KEYED_PROVIDERS`; cards on **API Keys**; live catalog via `GET /models`; `POST /keys/provider/{p}/test`. Exercised in-browser. |
+| **Audit-log UI** | ✅ Shipped | `/audit` route + `AuditTimeline.jsx`; `GET /audit/{request_id}/replay` re-derives the handle and reports `verified`. |
+| **Benchmark suite** | ✅ Shipped | `backend/benchmarks/benchmark.py`, with `results.md` and per-turn CSV. Measures tokens and latency — **not** accuracy. |
+| **User profile** | ✅ Shipped | `GET`/`PATCH /api/v1/profile`, migration `007`, 19 tests incl. cross-user isolation. Reachable from the sidebar and the account menu. |
+| **Chat retention + turn provenance** | ✅ Shipped | Transcript client-side only; `GET /sessions/{tag}/turns` returns provenance with `contains_message_text: false`. |
+| **GLiNER2 (tier 2) in production** | ⚠️ Partial | Code ships and is env-gated by `EXTRACTOR_MODE`, but `gliner`/`torch` live in `requirements-ml.txt` and are **deliberately not installed on Railway**. Deployed extraction is **rules only**. |
+| **Tier 3 (LLM extraction) in production** | ⚠️ Partial | Implemented, tested, gated behind `EXTRACTOR_LLM_FALLBACK` (default off) plus a provider key on the calling account. **Has never run on the deployed instance.** |
+| **Scope chaining (namespace → user → session)** | ❌ Not started | No `app/memory/scope.py`; no `end_user_id` or `namespace_id` anywhere in `backend/app/`; no migration past `007`. Memory is session-scoped, and crossing a session still means pasting a handle. |
+| **The eight Round 2 API endpoints** | ❌ Not started | `POST /memory/recall`, `GET`/`PATCH /memory/state`, `GET /handles/{handle}`, `POST /handles/restore`, `GET`/`POST /sessions`, `GET /memory/declined` — none exist. `POST /memory/ingest` still takes only `session_tag` and `text`; `GET /audit` takes no scope parameter. |
+| **`extraction: "async"`** | ❌ Not started | No `BackgroundTasks` usage anywhere in `backend/app/`. |
+| **Extraction settings UI** | ❌ Not started | Zero references to `EXTRACTOR_MODE` or `EXTRACTOR_LLM_*` in `frontend/src/` outside the help text. The tiers are configured by environment variable only. |
+| **Labelled eval harness** | ❌ Not started | `backend/tests/golden/` holds 48 cases, but it is a **regression corpus, not an eval set**: it asserts exact paths and values and produces no score. No precision, recall or F1 is computed anywhere, which is why no accuracy figure appears in this README. |
+| **Org / team workspaces, handle export API** | ❌ Not started | No code. |
+
+### Next, in the order it would be built
+
+1. **Scope chaining** — `end_user_id` on `memory_states` and `audit_logs`, a
+   `Scope` resolver, and the unique constraint widened to
+   `(handle, user_id, end_user_id, session_tag)`. Everything else on this list
+   depends on it, because without a user scope the endpoints below have nothing
+   to address.
+2. **The Round 2 endpoints**, once there is a scope for them to take.
+3. **Labelled eval harness** — the one item that would let this README quote an
+   accuracy number. Until it exists, it will not.
+4. Extraction settings UI · org/team workspaces · handle export API.
 
 ## 📄 License
 
