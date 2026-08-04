@@ -617,7 +617,19 @@ export default function Playground() {
   // fill, so a reload never flashes a blank transcript before restoring it.
   const [messages, setMessages] = useState(boot.messages)
   const [input, setInput] = useState('')
-  const [busy, setBusy] = useState(false)
+  /* Which sessions have a turn in flight, by tag.
+
+     This was a single `busy` boolean, and a boolean cannot say *whose* turn is
+     in flight. Sending in session A and then opening a new session left the new
+     one showing A's spinner with its composer disabled, waiting on a response
+     that was never going to be about it. Worse than the spinner: every write on
+     resolution — the reply, the tier chips, the retrieval — went into the
+     component's single set of state slots, so A's answer landed in whatever
+     session happened to be on screen when it arrived.
+
+     A tag can be pending independently of what is being looked at, so a turn
+     belongs to the session that issued it from start to finish. */
+  const [pending, setPending] = useState(() => new Set())
   const [typing, setTyping] = useState(false)       // demo typing indicator
   const [demoRunning, setDemoRunning] = useState(false)
   const [demoStep, setDemoStep] = useState(0)       // 1-6 while the demo runs
@@ -663,6 +675,12 @@ export default function Playground() {
   const keepForRef = useRef(null)
   // Which session the transcript currently in `messages` belongs to.
   const savedForRef = useRef(session)
+  /* The session on screen right now, readable from inside an async turn.
+     `send` closes over the `session` of the render that created it, which is
+     the tag the turn belongs to — correct for addressing the request, useless
+     for deciding where its result may be written. This ref answers the second
+     question. */
+  const sessionRef = useRef(session)
 
   const persistSessions = (list) => {
     setSessions(list)
@@ -671,6 +689,9 @@ export default function Playground() {
 
   const switchSession = (tag, { keep = false } = {}) => {
     keepForRef.current = keep ? tag : null
+    // synchronously, before the re-render: an in-flight turn that resolves in
+    // this same tick must already see that it is no longer the visible session
+    sessionRef.current = tag
     setSession(tag)
   }
 
@@ -779,9 +800,56 @@ export default function Playground() {
     switchSession(tag)
   }
 
-  const addMsg = (m) => setMessages((prev) => [...prev, { ts: Date.now(), ...m }])
+  const isPending = (tag) => pending.has(tag)
 
-  const applyIngest = (ing) => {
+  const markPending = (tag, on) => setPending((prev) => {
+    if (prev.has(tag) === on) return prev
+    const next = new Set(prev)
+    if (on) next.add(tag)
+    else next.delete(tag)
+    return next
+  })
+
+  /* Append a message to the session it belongs to, wherever the user is.
+
+     On screen it goes into React state. If the user has moved on, it is
+     appended to that tag's stored transcript instead, so switching back shows
+     the answer waiting rather than a turn that vanished. Dropping it would be
+     the easy fix and the wrong one — the request was made and answered. */
+  const addMsgFor = (tag, m) => {
+    const msg = { ts: Date.now(), ...m }
+    if (tag === sessionRef.current) {
+      setMessages((prev) => [...prev, msg])
+      return
+    }
+    const saved = loadSession(tag)
+    saveSession(tag, { messages: [...saved.messages, msg], ui: saved.ui })
+  }
+
+  const addMsg = (m) => addMsgFor(sessionRef.current, m)
+
+  /* Merge run-panel state into a session that is not currently displayed.
+     `stages` is deliberately cleared: the pipeline strip is a live trace of a
+     turn, and there was no live trace to show for one that ran off-screen.
+     Showing an idle strip is honest; replaying one that nobody watched is not. */
+  const stashUi = (tag, patch) => {
+    const saved = loadSession(tag)
+    saveSession(tag, {
+      messages: saved.messages,
+      ui: { ...saved.ui, ...patch, stages: undefined },
+    })
+  }
+
+  const applyIngest = (ing, tag = sessionRef.current) => {
+    if (tag !== sessionRef.current) {
+      stashUi(tag, {
+        source: ing.extraction_source || null,
+        origins: ing.extraction_origins || {},
+        tiers: ing.extraction_tiers || {},
+        notice: ing.extraction_notice || '',
+      })
+      return
+    }
     setChanged(new Set(diffPaths(stateRef.current, ing.state)))
     if (ing.extraction_source) setExtractionSource(ing.extraction_source)
     // a tier that was attempted and failed is not the same as one that never
@@ -818,6 +886,7 @@ export default function Playground() {
      panels used to survive a switch untouched, so session B showed session A's
      run; leaving any one of them behind reintroduces exactly that. */
   useEffect(() => {
+    sessionRef.current = session
     setInspected(null)
     setChanged(null)
     saveActiveSession(session)
@@ -896,59 +965,80 @@ export default function Playground() {
     }
   }
 
+  /* One turn, start to finish, for one session.
+
+     `tag` is captured here and every result is addressed to it. Nothing below
+     writes to "the current session" — the user is free to switch away mid-turn,
+     and the answer still belongs to the session that asked.
+
+     The request is deliberately *not* aborted on switch. Ingest has already
+     committed state server-side by the time the chat call is out, so cancelling
+     would leave a session whose memory moved but whose transcript never got the
+     reply — a silent hole in the one record the user can see. Letting it finish
+     and filing it against its own tag matches what the server already did. */
   const send = async (e) => {
     e.preventDefault()
     const text = input.trim()
-    if (!text || busy || demoRunning) return
+    const tag = session
+    if (!text || isPending(tag) || demoRunning) return
     setInput('')
-    setBusy(true)
-    addMsg({ role: 'user', content: text })
-    pipe.reset()
+    markPending(tag, true)
+    addMsgFor(tag, { role: 'user', content: text })
+    const onScreen = () => tag === sessionRef.current
+    if (onScreen()) pipe.reset()
     try {
       // 1. ingest — extraction + canonicalization + handle + storage
-      const ing = await runIngest(session, text)
+      const ing = await runIngest(tag, text)
 
       // 2. retrieve minimum for this text as a query
-      pipe.begin('retrieve')
+      if (onScreen()) pipe.begin('retrieve')
       const q = await api('/memory/query', {
         method: 'POST',
-        body: { session_tag: session, query: text },
+        body: { session_tag: tag, query: text },
       })
-      setRetrieved(q)
       const keys = q.metadata.subset_keys || []
-      pipe.complete([['retrieve', {
-        badge: `${keys.length} of ${keys.length + (q.metadata.fields_dropped || 0)} fields`,
-        payload: { subset_keys: keys, subset: q.subset },
-      }]])
+      if (onScreen()) {
+        setRetrieved(q)
+        pipe.complete([['retrieve', {
+          badge: `${keys.length} of ${keys.length + (q.metadata.fields_dropped || 0)} fields`,
+          payload: { subset_keys: keys, subset: q.subset },
+        }]])
+      } else {
+        stashUi(tag, { retrieved: q })
+      }
 
       // 3. chat — locally for ollama/*, otherwise via our gateway
-      const payload = { session_tag: session, query: text, model: effectiveModel }
+      const payload = { session_tag: tag, query: text, model: effectiveModel }
       try {
         const c = ollamaBase && effectiveModel.startsWith(OLLAMA_PREFIX)
-          ? await chatBrowserDirect(text, q, effectiveModel)
+          ? await chatBrowserDirect(text, q, effectiveModel, tag)
           : await chatWithRetry(payload)
-        addMsg({ role: 'assistant', content: c.response })
+        addMsgFor(tag, { role: 'assistant', content: c.response })
         // the audit row exists only once a response was actually served
-        pipe.complete([['audit', {
-          badge: 'logged',
-          payload: { audit_id: c.audit_id, subset_keys: c.subset_keys },
-        }]])
+        if (onScreen()) {
+          pipe.complete([['audit', {
+            badge: 'logged',
+            payload: { audit_id: c.audit_id, subset_keys: c.subset_keys },
+          }]])
+        }
       } catch (err) {
-        flagIfModelGone(err)
-        addMsg({ role: 'assistant', error: true, content: err.message, payload })
+        if (onScreen()) flagIfModelGone(err)
+        addMsgFor(tag, { role: 'assistant', error: true, content: err.message, payload })
       }
-      await refreshSidePanels(session)
+      // the panels belong to whatever is on screen; a background session
+      // refetches them when it is opened
+      if (onScreen()) await refreshSidePanels(tag)
     } catch (err) {
-      addMsg({ role: 'assistant', error: true, content: err.message })
+      addMsgFor(tag, { role: 'assistant', error: true, content: err.message })
     } finally {
-      setBusy(false)
+      markPending(tag, false)
     }
   }
 
   /* The prompt goes straight from this browser to the user's own daemon,
      so it never reaches our servers. The retrieval already happened here, so
      the disclosure is posted back to keep the audit trail complete. */
-  const chatBrowserDirect = async (text, retrieved, model) => {
+  const chatBrowserDirect = async (text, retrieved, model, tag = sessionRef.current) => {
     const bare = model.slice(OLLAMA_PREFIX.length)
     let result
     try {
@@ -968,7 +1058,10 @@ export default function Playground() {
     const audited = await api('/audit/manual', {
       method: 'POST',
       body: {
-        session_tag: session,
+        // the tag this turn was issued for, not whatever is on screen when the
+        // local daemon finally answers — an audit row filed against the wrong
+        // session is a false provenance record, which is worse than none
+        session_tag: tag,
         handle_used: retrieved.handle_used,
         subset_keys: retrieved.metadata?.subset_keys || [],
         provider: 'ollama',
@@ -982,21 +1075,30 @@ export default function Playground() {
     }
   }
 
-  /* Re-run just the failed chat call, replacing its error bubble. */
+  /* Re-run just the failed chat call, replacing its error bubble.
+
+     A retry edits a message *by index* in the visible transcript, so unlike a
+     fresh send it cannot follow the user to another session — index 4 of a
+     different transcript is a different message. It therefore stays bound to
+     the session it started in and gives up quietly if that is no longer the
+     one on screen. */
   const retryChat = async (idx, payload) => {
-    if (busy || demoRunning) return
-    setBusy(true)
+    const tag = session
+    if (isPending(tag) || demoRunning) return
+    markPending(tag, true)
     try {
       const c = await chatWithRetry(payload)
+      if (tag !== sessionRef.current) return
       setMessages((m) => m.map((x, i) =>
         (i === idx ? { role: 'assistant', content: c.response, ts: Date.now() } : x)))
-      await refreshSidePanels(session)
+      await refreshSidePanels(tag)
     } catch (err) {
+      if (tag !== sessionRef.current) return
       flagIfModelGone(err)
       setMessages((m) => m.map((x, i) =>
         (i === idx ? { ...x, content: err.message, ts: Date.now() } : x)))
     } finally {
-      setBusy(false)
+      markPending(tag, false)
     }
   }
 
@@ -1029,11 +1131,15 @@ export default function Playground() {
      Shared by the demo and by ordinary sends, so the strip means the same
      thing either way. Declared here but only ever called after render. */
   const runIngest = async (tag, text) => {
-    pipe.begin('ingest')
+    // the strip traces the visible session; a turn running elsewhere still
+    // ingests, it just does not animate a panel the user is not looking at
+    const onScreen = () => tag === sessionRef.current
+    if (onScreen()) pipe.begin('ingest')
     const ing = await api('/memory/ingest', {
       method: 'POST', body: { session_tag: tag, text },
     })
-    applyIngest(ing)
+    applyIngest(ing, tag)
+    if (!onScreen()) return ing
     pipe.complete([
       ['ingest', { badge: 'sent', payload: text }],
       ['extract', {
@@ -1275,7 +1381,7 @@ export default function Playground() {
   }
 
   const startDemo = () => {
-    if (busy) return
+    if (pending.size) return
     clearAutoAdvance()
     // a new run id invalidates any in-flight step from a previous run
     const runId = ++runIdRef.current
@@ -1400,7 +1506,7 @@ export default function Playground() {
     demoCtlRef.current = { start: startDemo, advance: advanceDemo }
   })
 
-  const locked = busy || demoRunning
+  const locked = isPending(session) || demoRunning
 
   return (
     <div className="pg">
@@ -1560,7 +1666,7 @@ export default function Playground() {
               <span className="demo-summary-note">measured from this run's retrievals</span>
             </div>
           )}
-          {(busy || typing) && (
+          {(isPending(session) || typing) && (
             <div className="pg-msg assistant"><div className="pg-bubble pg-typing">···</div></div>
           )}
           <div ref={chatEndRef} />
