@@ -244,13 +244,36 @@ export function DeclineChart({ declines }) {
 
 /* ---- 3. Handle lineage --------------------------------------------------- */
 
+/* Session tags are free text and routinely longer than the label gutter. The
+   text is end-anchored, so an over-long one ran off the left edge and was
+   clipped there — "spanfix-1785910318" rendered as "fix-1785910318", which
+   reads as a different session rather than as a truncation, on a chart whose
+   whole subject is identity.
+
+   Capping the characters is only half of it: the cap has to fit the gutter, or
+   the truncated label clips as well and you get "panfix-17859…". A character
+   count cannot promise that on its own — 13 average characters measure ~85px
+   but 13 wide ones measure ~133px — so the label is anchored at the *start*
+   and clipped to the gutter. Whatever happens, the tag's opening characters
+   are the ones on screen and the ellipsis says it was cut, instead of a tail
+   that reads as some other session. The full tag stays in the hover title, the
+   tooltip and the table. */
+const LABEL_CHARS = 13
+const LABEL_PX = 124
+const LABEL_CLIP = 'sj-lineage-label-clip'
+
+function shortTag(tag) {
+  const t = String(tag || '')
+  return t.length > LABEL_CHARS ? `${t.slice(0, LABEL_CHARS - 1)}…` : t
+}
+
 export function LineageChart({ lineage }) {
   const [tip, bind] = useTip()
   const chains = (lineage || []).filter((s) => s.versions.length)
   if (!chains.length) return null
 
   const widest = Math.max(...chains.map((s) => s.versions.length))
-  const STEP = 52, R = 7, LABEL = 96, ROW = 48
+  const STEP = 52, R = 7, LABEL = LABEL_PX, ROW = 48
   const W = LABEL + Math.max(1, widest - 1) * STEP + 40
   const H = chains.length * ROW
 
@@ -269,12 +292,18 @@ export function LineageChart({ lineage }) {
         <svg viewBox={`0 0 ${W} ${H}`} width={W} height={H} className="chart-svg"
              role="img"
              aria-label={`Handle lineage for ${chains.length} sessions`}>
+          <defs>
+            <clipPath id={LABEL_CLIP}>
+              <rect x="0" y="0" width={LABEL - 14} height={H} />
+            </clipPath>
+          </defs>
           {chains.map((s, row) => {
             const y = row * ROW + ROW / 2
             const last = LABEL + (s.versions.length - 1) * STEP
             return (
               <g key={s.session_tag}>
-                <text x={LABEL - 12} y={y + 4} textAnchor="end" className="chart-cat">
+                <text x={0} y={y + 4} className="chart-cat"
+                      clipPath={`url(#${LABEL_CLIP})`}>
                   <title>{s.session_tag}</title>
                   {shortTag(s.session_tag)}
                 </text>
@@ -314,18 +343,6 @@ export function LineageChart({ lineage }) {
       />
     </figure>
   )
-}
-
-/* Session tags are free text and routinely longer than the label gutter. The
-   text is end-anchored, so an over-long one ran off the left edge and was
-   clipped there — "spanfix-1785910318" rendered as "fix-1785910318", which
-   reads as a different session rather than as a truncation. Cut it at the end,
-   mark it, and keep the full tag in the tooltip and the table. */
-const LABEL_CHARS = 14
-
-function shortTag(tag) {
-  const t = String(tag || '')
-  return t.length > LABEL_CHARS ? `${t.slice(0, LABEL_CHARS - 1)}…` : t
 }
 
 export function hasInsight(ins) {
