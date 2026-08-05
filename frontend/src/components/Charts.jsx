@@ -275,7 +275,8 @@ export function LineageChart({ lineage }) {
             return (
               <g key={s.session_tag}>
                 <text x={LABEL - 12} y={y + 4} textAnchor="end" className="chart-cat">
-                  {s.session_tag}
+                  <title>{s.session_tag}</title>
+                  {shortTag(s.session_tag)}
                 </text>
                 {s.versions.length > 1 && (
                   <line x1={LABEL} y1={y} x2={last} y2={y}
@@ -313,6 +314,18 @@ export function LineageChart({ lineage }) {
       />
     </figure>
   )
+}
+
+/* Session tags are free text and routinely longer than the label gutter. The
+   text is end-anchored, so an over-long one ran off the left edge and was
+   clipped there — "spanfix-1785910318" rendered as "fix-1785910318", which
+   reads as a different session rather than as a truncation. Cut it at the end,
+   mark it, and keep the full tag in the tooltip and the table. */
+const LABEL_CHARS = 14
+
+function shortTag(tag) {
+  const t = String(tag || '')
+  return t.length > LABEL_CHARS ? `${t.slice(0, LABEL_CHARS - 1)}…` : t
 }
 
 export function hasInsight(ins) {

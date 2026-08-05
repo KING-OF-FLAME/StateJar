@@ -1911,7 +1911,14 @@ body.presenter-mode .card, body.presenter-mode .panel { border-color: #D8D2C8; }
    ink token instead, so nothing is identified by colour alone. */
 .chart-grid { display: grid; gap: 18px; margin-bottom: 22px; }
 @media (min-width: 1080px) {
-  .chart-grid.chart-grid-2 { grid-template-columns: 1fr 1fr; }
+  /* `auto-fit` rather than two fixed columns: each chart renders only when it
+     has data, so the pair is routinely a single card, and a fixed grid left it
+     sitting beside an empty half. Stretching it full-width instead would give a
+     1100px card around a 392px chart, which is worse — this keeps the card the
+     size of its contents. */
+  .chart-grid.chart-grid-2 {
+    grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+  }
 }
 
 .chart-fig {
