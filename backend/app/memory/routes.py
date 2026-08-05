@@ -218,6 +218,16 @@ def query(
         "subset": result["subset"],
         "metadata": result["metadata"],
         "audit_id": audit_id,
+        # The prompt-ready form of the same subset, built by the same function
+        # /chat uses. Without it a caller bringing their own LLM gets a JSON
+        # blob and has to invent a wrapper for it — and every caller inventing
+        # a different one is how the sidecar path silently stops matching the
+        # built-in path. Sharing the builder makes them identical by
+        # construction, so `POST /chat` and "retrieve, inject, call your own
+        # model" put the same words in front of the model.
+        "memory_context": gateway.build_system_context(
+            handle, result["subset"], _changes_this_turn(db, user.id, handle)
+        ),
     }
 
 
