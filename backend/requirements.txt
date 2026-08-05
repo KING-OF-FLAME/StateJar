@@ -12,4 +12,8 @@ python-dotenv>=1.0
 slowapi>=0.1.9
 pytest>=8.2
 httpx>=0.27
+# Used by test_gateway / test_integration / test_ollama / test_providers to mock
+# provider HTTP. Was missing here, so a fresh clone collected 4 import errors
+# before running a single test.
+respx>=0.21
 tiktoken>=0.7
