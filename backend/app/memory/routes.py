@@ -20,6 +20,7 @@ from app.memory.audit import AuditLogger, audit_logs
 from app.memory.canonicalizer import NORM_VERSION, SCHEMA_VERSION, canonicalize
 from app.memory.extractor import extract
 from app.memory.handle import generate_handle
+from app.memory.insights import summarize
 from app.memory.retriever import retrieve_minimum
 from app.memory.storage import MemoryStore, memory_states
 from app.memory.versioning import UNHASHED_KEYS, evolve_state, initial_state
@@ -441,6 +442,42 @@ def restore(
             for s in canon.ACTIVE_SECTIONS
         ),
     }
+
+
+@router.get("/memory/insights")
+def insights(
+    user: UserOut = Depends(get_api_caller),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Aggregates for the dashboard charts, over the caller's own states only.
+
+    One query rather than the versions-then-state-per-handle walk the client
+    would otherwise do, which is N+1 requests for a user with any history.
+
+    The `user_id` predicate is on the query and there is no parameter that can
+    widen it — same rule as every other read here: the account comes from the
+    credential, never from the request.
+    """
+    rows = db.execute(
+        select(
+            memory_states.c.handle,
+            memory_states.c.session_tag,
+            memory_states.c.created_at,
+            memory_states.c.state_json,
+        )
+        .where(memory_states.c.user_id == user.id)
+        .order_by(memory_states.c.id)
+    ).mappings().all()
+
+    return summarize([
+        {
+            "handle": r["handle"],
+            "session_tag": r["session_tag"],
+            "created_at": iso_utc(r["created_at"]),
+            "state_json": r["state_json"],
+        }
+        for r in rows
+    ])
 
 
 @router.get("/memory/versions")

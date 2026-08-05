@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../lib/api.js'
+import {
+  DeclineChart, LineageChart, NamespaceChart, hasInsight,
+} from '../components/Charts.jsx'
 
 function CopyButton({ text }) {
   const [copied, setCopied] = useState(false)
@@ -19,6 +22,7 @@ function CopyButton({ text }) {
 export default function Dashboard() {
   const [stats, setStats] = useState(null)
   const [usage, setUsage] = useState(null)
+  const [insight, setInsight] = useState(null)
   const [error, setError] = useState('')
   /* undefined = still asking, '' = asked and there is no name to show.
      The distinction matters: rendering the fallback copy while the request is
@@ -29,6 +33,10 @@ export default function Dashboard() {
   useEffect(() => {
     api('/memory/stats').then(setStats).catch((e) => setError(e.message))
     api('/usage').then(setUsage).catch(() => {}) // secondary panel: never blocks the page
+    // Charts are additive: if this fails the page is the page it was before.
+    // Nothing here renders a placeholder — a chart with invented data on a
+    // product about not guessing would be the worst thing on the page.
+    api('/memory/insights').then(setInsight).catch(() => {})
     // Never blocks the page either: an empty profile and a failed request are
     // the same thing to a heading, and neither is worth an error banner.
     api('/profile')
@@ -79,6 +87,21 @@ export default function Dashboard() {
           <span className="stat-note">minimal disclosure vs full state</span>
         </div>
       </div>
+
+      {/* Rendered only once there is something real to draw. Each chart also
+          returns null on its own empty series, so a user with states but no
+          declines gets two charts rather than one padded with zeros. */}
+      {hasInsight(insight) && (
+        <>
+          <div className="chart-grid chart-grid-2">
+            <NamespaceChart data={insight.namespaces} />
+            <DeclineChart declines={insight.declines} />
+          </div>
+          <div className="chart-grid">
+            <LineageChart lineage={insight.lineage} />
+          </div>
+        </>
+      )}
 
       <div className="page-head" style={{ marginBottom: 14 }}>
         <div>
