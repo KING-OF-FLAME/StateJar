@@ -51,14 +51,41 @@ def _merge_field(old_value: Any, new_value: Any) -> Any:
     return copy.deepcopy(new_value)
 
 
+def _admissible(path: str, value: Any) -> str:
+    """"" if the field can hold this value, else the reason it cannot.
+
+    The first write of a field goes through `extractor._put`, which runs the
+    registry normalizer and quarantines anything it refuses. Updates came in
+    here instead and were written straight onto the path — so a value the field
+    would have rejected on Monday could still land on Tuesday by arriving as an
+    update. The guard belongs on both doors or on neither.
+
+    Normalizers are idempotent, so re-running one over an already-canonical
+    value is a no-op; only a value that was never admissible is caught.
+    """
+    spec = canon.resolve(path)
+    if spec is None:
+        return ""            # dynamic fields normalize on write, not here
+    try:
+        normalized = spec.normalizer(value)
+    except (TypeError, ValueError):
+        return "rejected_value"
+    return "" if normalized not in (None, "", [], {}) else "rejected_value"
+
+
 def _merge(old_state: dict[str, Any], new_extracted: dict[str, Any]) -> dict[str, Any]:
     """Merge new info over the old state (new values win); pure function.
 
     Merging walks canonical *paths* rather than a section's top-level keys, so
     a nested field like `constraints.budget.max` replaces only itself and
     leaves any sibling under `budget` intact.
+
+    A value the target field cannot hold is refused and recorded in quarantine
+    rather than written: the old value stays, because losing a known-good fact
+    to an inadmissible one is the worst of the three outcomes.
     """
     merged = copy.deepcopy(old_state)
+    refused: dict[str, Any] = {}
 
     for section in _TRACKED_SECTIONS:
         new_section = new_extracted.get(section) or {}
@@ -67,6 +94,10 @@ def _merge(old_state: dict[str, Any], new_extracted: dict[str, Any]) -> dict[str
         merged.setdefault(section, {})
         for path in canon.leaf_paths_in(new_section, section):
             new_value = canon.read_path(new_extracted, path)
+            if reason := _admissible(path, new_value):
+                refused[path] = {"value": new_value, "reason": reason,
+                                 "source": "update"}
+                continue
             canon.write_path(
                 merged, path, _merge_field(canon.read_path(merged, path), new_value)
             )
@@ -88,6 +119,7 @@ def _merge(old_state: dict[str, Any], new_extracted: dict[str, Any]) -> dict[str
     # quarantine accumulates so the registry can be grown from real misses
     unmapped = {**(old_state.get("_unmapped") or {}), **(new_extracted.get("_unmapped") or {})}
     unmapped.update(new_extracted.get("unmapped") or {})
+    unmapped.update(refused)
     if unmapped:
         merged["_unmapped"] = unmapped
     merged.pop("unmapped", None)

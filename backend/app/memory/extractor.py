@@ -470,7 +470,7 @@ def extract_rules(
                  context=clause)
             _put(state, origins, SOURCE_RULES, "constraints", "destination", route[1],
                  context=clause)
-        elif city := rules.find_city(clause):
+        elif not rules.states_a_route(clause) and (city := rules.find_city(clause)):
             _put(state, origins, SOURCE_RULES, "facts", "city", city, context=clause)
 
         # An amount only becomes the *budget* when nothing else in the clause

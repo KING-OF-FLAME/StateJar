@@ -73,21 +73,57 @@ def split_clauses(text: str) -> list[str]:
     return [*parts, whole] if whole and whole not in parts else parts
 
 
-# --- name ---------------------------------------------------------------------
+# --- identity spans -----------------------------------------------------------
+#
+# `name` and `city` capture with the same pattern, because a person and a place
+# look identical as text. That makes the trigger word in front of a span the
+# only thing choosing its slot — and "I'm ..." and "from ..." occur constantly
+# in sentences that name nobody and nowhere:
+#
+#     "I'm Mumbai based now, switching from Senior Software Engineer to ..."
+#
+# stored name="Mumbai" and city="Senior Software", overwriting a correct name
+# and a correct city from an earlier turn. Both values were one slot away from
+# where they belonged.
+#
+# The two guards below fix that by asking the span, not its position. A capture
+# is refused when the phrase it sits in continues past it (the two-word cap cut
+# "Senior Software Engineer" in half, and half a phrase is not evidence), and
+# when a marker attached to the span itself contradicts the slot the trigger
+# chose. Both are structural: they read the shape of the sentence rather than a
+# list of words, so they do not need to grow as new job titles and city names
+# appear. Refusing costs a fact; storing the wrong one costs the claim.
 
 # A word that is allowed to be part of a name.
 _NAME_WORD = r"(?!(?:%s)\b)[A-Za-z][A-Za-z'’-]*" % "|".join(sorted(NAME_STOPWORDS))
 _NAME = rf"({_NAME_WORD}(?:\s+{_NAME_WORD})?)"
 
+# Anything that is not a stopword, punctuation or the end of the clause
+# continues the noun phrase the capture just truncated.
+_PHRASE_CONTINUES = re.compile(
+    r"\s+(?!(?:%s)\b)[A-Za-z]" % "|".join(sorted(NAME_STOPWORDS))
+)
+
+# Said *of* a place and never of a person: "Mumbai based", "Pune born". These
+# words already mark a location for the city rule below, in their pre-posed
+# form ("based in Mumbai"); this is the same signal read from the other side.
+_LOCATIVE_MARKERS = ("based", "born", "raised", "headquartered", "native")
+_LOCATIVE_SUFFIX = re.compile(
+    r"\s+(?:%s)\b" % "|".join(_LOCATIVE_MARKERS), re.IGNORECASE
+)
+
+# `explicit` marks a trigger that can only be an act of naming. "My name is X"
+# and "call me X" are unambiguous; "I'm X" is the copula and takes any
+# complement at all, so a span behind it has to earn the slot.
 _NAME_PATTERNS = (
-    re.compile(rf"\bmy name is\s+{_NAME}", re.IGNORECASE),
-    re.compile(rf"\bi\s*(?:am|'m|m)\s+called\s+{_NAME}", re.IGNORECASE),
-    re.compile(rf"\bi\s*(?:am|'m|’m)\s+{_NAME}", re.IGNORECASE),
-    re.compile(rf"\bthis is\s+{_NAME}", re.IGNORECASE),
-    re.compile(rf"\bcall me\s+{_NAME}", re.IGNORECASE),
-    re.compile(rf"\bmera naam\s+{_NAME}", re.IGNORECASE),
-    re.compile(rf"\bmain\s+{_NAME}\s+(?:hoon|hu|hun)\b", re.IGNORECASE),
-    re.compile(rf"^{_NAME}\s+here\b", re.IGNORECASE),
+    (re.compile(rf"\bmy name is\s+{_NAME}", re.IGNORECASE), True),
+    (re.compile(rf"\bi\s*(?:am|'m|m)\s+called\s+{_NAME}", re.IGNORECASE), True),
+    (re.compile(rf"\bi\s*(?:am|'m|’m)\s+{_NAME}", re.IGNORECASE), False),
+    (re.compile(rf"\bthis is\s+{_NAME}", re.IGNORECASE), True),
+    (re.compile(rf"\bcall me\s+{_NAME}", re.IGNORECASE), True),
+    (re.compile(rf"\bmera naam\s+{_NAME}", re.IGNORECASE), True),
+    (re.compile(rf"\bmain\s+{_NAME}\s+(?:hoon|hu|hun)\b", re.IGNORECASE), True),
+    (re.compile(rf"^{_NAME}\s+here\b", re.IGNORECASE), False),
 )
 
 
@@ -97,8 +133,29 @@ def _titlecase(value: str) -> str:
         c.isupper() for c in w[1:]) else w.capitalize() for w in value.split())
 
 
+def _truncates_phrase(clause: str, end: int) -> bool:
+    """Whether the capture stopped in the middle of a longer noun phrase.
+
+    The capture takes at most two words, so "from Senior Software Engineer"
+    yields "Senior Software" and looks exactly like a two-word city. What tells
+    them apart is what comes next: a real place is followed by a function word
+    or the end of the clause, never by a third content word.
+    """
+    return bool(_PHRASE_CONTINUES.match(clause, end))
+
+
+def _is_participle(word: str) -> bool:
+    """"I'm switching ..." is a verb, not an introduction.
+
+    Grammar rather than vocabulary: every progressive verb behaves this way, so
+    this needs no list and does not grow. The length floor keeps the short
+    surnames that genuinely end in -ing (Wing, Ling, Xing).
+    """
+    return len(word) >= 6 and word.lower().endswith("ing")
+
+
 def find_name(clause: str) -> str | None:
-    for pattern in _NAME_PATTERNS:
+    for pattern, explicit in _NAME_PATTERNS:
         m = pattern.search(clause)
         if not m:
             continue
@@ -108,6 +165,16 @@ def find_name(clause: str) -> str | None:
             continue
         if len(candidate) < 2 or candidate.isdigit():
             continue
+        # A marker on the span itself outranks the trigger in front of it —
+        # whether it follows the capture ("I'm Mumbai based") or was swallowed
+        # by it, since nothing stops a two-word capture eating the marker
+        # ("I'm Bangalore born and raised" captures "Bangalore born").
+        if (_LOCATIVE_SUFFIX.match(clause, m.end(1))
+                or words[-1].lower() in _LOCATIVE_MARKERS):
+            continue
+        if not explicit and (_truncates_phrase(clause, m.end(1))
+                             or any(_is_participle(w) for w in words)):
+            continue
         return _titlecase(candidate)
     return None
 
@@ -115,11 +182,25 @@ def find_name(clause: str) -> str | None:
 # --- city ---------------------------------------------------------------------
 
 _CITY = rf"({_NAME_WORD}(?:\s+{_NAME_WORD})?)"
+# A place name, unlike a person's, does not carry an apostrophe here — and
+# allowing one lets a contraction be read as the first word of the span.
+_PLACE_WORD = r"(?!(?:%s)\b)[A-Za-z][A-Za-z-]*" % "|".join(sorted(NAME_STOPWORDS))
 _CITY_PATTERNS = (
     re.compile(rf"\bi\s*(?:am|'m|’m)\s+from\s+{_CITY}", re.IGNORECASE),
     re.compile(rf"\b(?:based|living|live|located|stay|staying)\s+in\s+{_CITY}", re.IGNORECASE),
     re.compile(rf"\bfrom\s+{_CITY}", re.IGNORECASE),
     re.compile(rf"\b{_CITY}\s+se\b", re.IGNORECASE),
+    # "Mumbai based", "Pune born" — the locative marker after the span. Last,
+    # so "based in X" still wins when a clause carries both forms.
+    #
+    # This is the only city pattern with no trigger in front of the span, so it
+    # is the only one that has to say where a span may *start*. Without the
+    # lookbehind and the apostrophe-free word, "I'm Mumbai based" matches from
+    # the "I" and stores the city as "I'm Mumbai" — `_NAME_WORD` treats a
+    # contraction as one word, which is right for O'Brien and wrong here.
+    re.compile(rf"(?<![A-Za-z'’-])({_PLACE_WORD}(?:\s+{_PLACE_WORD})?)"
+               rf"(?=\s+(?:%s)\b)" % "|".join(_LOCATIVE_MARKERS),
+               re.IGNORECASE),
 )
 
 
@@ -130,6 +211,8 @@ def find_city(clause: str) -> str | None:
             continue
         candidate = m.group(1).strip(" .'’-")
         if not candidate or any(w.lower() in NAME_STOPWORDS for w in candidate.split()):
+            continue
+        if _truncates_phrase(clause, m.end(1)):
             continue
         return _titlecase(candidate)
     return None
@@ -650,6 +733,11 @@ def find_employer(clause: str) -> str | None:
     value = m.group(1).strip(" .'’-")
     if not value or any(w.lower() in NAME_STOPWORDS for w in value.split()):
         return None
+    # the same two-word cap as the identity spans, and the same failure:
+    # "work at Tata Consultancy Services" stored the employer as "Tata
+    # Consultancy", which is a different company from the one that was said
+    if _truncates_phrase(clause, m.end(1)):
+        return None
     return _titlecase(value)
 
 
@@ -658,8 +746,19 @@ def find_payment(clause: str) -> str | None:
     return m.group(1) if m else None
 
 
+def states_a_route(clause: str) -> bool:
+    """Whether the clause names a from/to pair at all.
+
+    Separate from `find_route` because a clause can state a route whose ends
+    are not clean enough to store. It still must not fall through to the city
+    rule, which would read a shipping origin as the user's home town — the
+    exact misread the route rule exists to prevent.
+    """
+    return _ROUTE.search(clause) is not None
+
+
 def find_route(clause: str) -> tuple[str, str] | None:
-    """(origin, destination) when the clause states both ends."""
+    """(origin, destination) when the clause states both ends *cleanly*."""
     m = _ROUTE.search(clause)
     if not m:
         return None
@@ -667,6 +766,11 @@ def find_route(clause: str) -> tuple[str, str] | None:
     for value in (origin, destination):
         if not value or any(w.lower() in NAME_STOPWORDS for w in value.split()):
             return None
+    # The origin is fenced by the " to " that follows it; the destination is
+    # fenced by nothing, so it truncates exactly as the city span did —
+    # "Delhi to Navi Mumbai Airport" delivered to "Navi Mumbai".
+    if _truncates_phrase(clause, m.end(2)):
+        return None
     return _titlecase(origin), _titlecase(destination)
 
 
