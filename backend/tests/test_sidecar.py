@@ -114,9 +114,12 @@ def test_context_carries_only_the_retrieved_subset(
     body = client.post("/api/v1/memory/query", headers=headers,
                        json={"session_tag": "s1", "query": "what is my budget?"}).json()
 
-    import json
-    assert json.dumps(body["subset"], ensure_ascii=False,
-                      sort_keys=True) in body["memory_context"]
+    # The context carries exactly the retrieved subset and nothing wider. It
+    # is compared through the renderer rather than as JSON because the subset
+    # is sent as `path: value` lines; the property under test is that the
+    # disclosed set is the retrieved set, not how it is encoded.
+    from app.llm.gateway import render_compact
+    assert render_compact(body["subset"]) in body["memory_context"]
 
 
 def test_query_still_requires_authentication(client: TestClient) -> None:

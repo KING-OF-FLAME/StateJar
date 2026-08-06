@@ -193,7 +193,7 @@ def test_full_pipeline_end_to_end(
     # preferences", which is a request for what StateJar has on file. What
     # must never appear is the sentence the user typed to establish it — the
     # claim is no chat replay, not no facts.
-    assert '"name": "Ayaan"' in system_msg
+    assert "facts.name: Ayaan" in system_msg
 
     # The superseded ₹2000 appears exactly once, inside the change block, and
     # labelled as prior. That distinction is the whole of P0-4: disclosing the

@@ -146,7 +146,10 @@ def test_list_keys_scoped_to_current_user(client: TestClient) -> None:
 def test_build_system_context() -> None:
     ctx = build_system_context("shm_" + "a" * 40, {"preferences": {"contact_mode": "email"}})
     assert ctx.startswith("Known user state (retrieved via StateJar handle shm_")
-    assert '"contact_mode": "email"' in ctx
+    # the contract is that the field and its value reach the model, not how
+    # they are encoded — the subset is rendered as `path: value` lines rather
+    # than as a JSON blob, which is a presentation change and nothing more
+    assert "preferences.contact_mode: email" in ctx
 
 
 def test_every_provider_implements_the_shared_interface() -> None:

@@ -45,6 +45,7 @@ from app.llm.providers import (
     get_provider,
     provider_label,
 )
+from app.schema import canonical as canon
 from app.timeutil import iso_utc
 
 llm_metadata = MetaData()
@@ -80,6 +81,94 @@ def decrypt_key(blob: bytes) -> str:
     return AESGCM(_aes_key()).decrypt(nonce, ct, None).decode("utf-8")
 
 
+# Envelope keys that describe how a value is stored rather than what it says.
+# `type` is recoverable from the value, and `concept` is the phrase the slug in
+# the path was derived from — both are for the store, not for the reader.
+_ENVELOPE_META = ("type", "concept")
+
+
+def _render_value(value: Any) -> str:
+    """One stored value as the shortest string that still means the same thing.
+
+    Units, currencies and qualifiers stay: "8000000" and "8000000 g" are
+    different facts, and dropping the unit is how a saving becomes a wrong
+    answer. Only the bookkeeping around them goes.
+    """
+    if isinstance(value, list):
+        return ", ".join(_render_value(v) for v in value)
+    if not isinstance(value, dict):
+        return "" if value is None else str(value)
+
+    # a date: the ISO day is the fact; the raw phrasing is what the user said,
+    # and is kept only when it adds something the ISO form does not
+    if "iso" in value:
+        out = str(value["iso"])
+        raw = str(value.get("raw") or "")
+        if raw and raw not in out:
+            out += f" ({raw})"
+        # caveats, but only when actually set — a line of "false" flags on
+        # every date costs more than the flags are worth
+        flags = [k for k in ("ambiguous", "year_inferred") if value.get(k)]
+        return out + (f" [{', '.join(flags)}]" if flags else "")
+
+    if "value" in value:
+        out = str(value["value"])
+        if unit := value.get("unit"):
+            out += f" {unit}"
+        if currency := value.get("currency"):
+            out = f"{currency} {out}"
+        return out
+
+    # an unrecognised envelope: print it whole rather than guess, so a new
+    # value shape degrades to verbose instead of to silently missing
+    return json.dumps(
+        {k: v for k, v in value.items() if k not in _ENVELOPE_META},
+        ensure_ascii=False, sort_keys=True,
+    )
+
+
+def render_compact(subset: dict[str, Any]) -> str:
+    """The retrieved subset as one `path: value` line per field.
+
+    Model-facing only. Nothing here reaches canonicalization, the hashed bytes
+    or the handle — those read the stored state, which this never touches.
+
+    The JSON form spent most of its tokens on the envelope rather than on the
+    fact inside it: `{"concept": "truck count", "type": "count", "value": 3}`
+    is roughly twenty tokens to say `truck_count: 3`. The model needs the
+    field, the value and the unit; it does not need the storage metadata, the
+    braces or the quoting.
+
+    Declines and unresolved fields are kept deliberately. "This was refused,
+    and here is why" is the thing StateJar can say that a transcript cannot,
+    and it is a handful of tokens.
+    """
+    lines: list[str] = []
+
+    for section in sorted(subset):
+        block = subset[section]
+        if section == "unresolved":
+            for entry in block or []:
+                if isinstance(entry, dict) and entry.get("field"):
+                    reason = entry.get("reason") or "unstated"
+                    lines.append(f"unresolved.{entry['field']}: — ({reason})")
+            continue
+        if section == "_unmapped":
+            for key, entry in (block or {}).items():
+                reason = (entry or {}).get("reason", "unstated") if isinstance(entry, dict) else "unstated"
+                value = (entry or {}).get("value", "") if isinstance(entry, dict) else ""
+                lines.append(f"declined.{key}: {value} (refused: {reason})")
+            continue
+        if not isinstance(block, dict):
+            continue
+        for path in sorted(canon.leaf_paths_in(block, section)):
+            rendered = _render_value(canon.read_path(subset, path))
+            if rendered != "":
+                lines.append(f"{path}: {rendered}")
+
+    return "\n".join(lines)
+
+
 def build_system_context(
     handle: str, subset: dict[str, Any],
     changes: list[dict[str, Any]] | None = None,
@@ -91,7 +180,7 @@ def build_system_context(
     like {"action":"update","handle":…} rendered straight into the chat
     bubble. The state is context, not a response format.
     """
-    subset_json = json.dumps(subset, ensure_ascii=False, sort_keys=True)
+    subset_json = render_compact(subset)
 
     # What this turn changed. State is committed before the context is
     # assembled, so without this the model sees only post-update state and
@@ -109,7 +198,8 @@ def build_system_context(
         )
 
     return (
-        f"Known user state (retrieved via StateJar handle {handle}): {subset_json}"
+        f"Known user state (retrieved via StateJar handle {handle}):\n"
+        f"{subset_json}"
         f"{changed_block}\n\n"
         "This state is background context for you only. Reply to the user in "
         "plain, natural, conversational language. Never output JSON, key/value "
