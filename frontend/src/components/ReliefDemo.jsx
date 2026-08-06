@@ -175,7 +175,16 @@ export default function ReliefDemo({ onState, onHandle, onClose }) {
         method: 'POST',
         body: { session_tag: DEMO_SESSION, query: turn.user, audit: true },
       })
-      sent = tokens(JSON.stringify(q.subset))
+      /* What actually goes to the model, not the stored shape of it.
+         This measured `JSON.stringify(q.subset)` — the raw envelopes as they
+         sit in the record, complete with `type` and `concept` keys the model
+         never sees. That is neither what is sent nor what a replay would
+         send; it was a third number that described nothing, and it is why the
+         compact renderer landed server-side without the demo figure moving.
+         `memory_context` is the exact string the system message carries. The
+         current message is added because the replay it is compared against
+         also contains it. */
+      sent = tokens(q.memory_context || '') + tokens(turn.user)
       mode = q.metadata?.retrieval_mode || ''
     } catch (err) {
       setError(err.message)
