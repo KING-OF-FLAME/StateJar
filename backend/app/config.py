@@ -52,10 +52,20 @@ class Settings(BaseSettings):
     # reason an answer is wrong — under a few hundred tokens there is nothing
     # meaningful to save anyway.
     #
-    # Set to 0 to make selective retrieval always engage. That maximises the
-    # headline token-saving figure but reintroduces the risk of answering
-    # from a subset that is missing a field the query needed.
-    retriever_full_state_tokens: int = 800
+    # 400 is measured, not guessed: it is the lowest value at which selective
+    # retrieval engages on the 40-turn benchmark while every question turn
+    # still receives the fields its answer needs. At 800 the mode is
+    # `full_state` on every turn and selection never runs at all. At 300 and
+    # below the retraction turn and the question that follows it come back
+    # with an empty subset, so the model is asked whether a cancelled supply
+    # is still listed while holding no state at all. The saving keeps rising
+    # past that point, which is exactly why the gate is answer correctness and
+    # not the percentage.
+    #
+    # Set to 0 to make selective retrieval always engage. Do not: it reports
+    # 99%+ by sending no context, which docs/known-issues.md records as a
+    # false number.
+    retriever_full_state_tokens: int = 400
     # --- provider endpoints ---
     # Overridable so a deployment can route through a proxy or gateway, and so
     # tests can point a provider at a local stub instead of the real host.

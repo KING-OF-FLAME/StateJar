@@ -26,6 +26,7 @@ from typing import Any
 
 from app.config import get_settings
 from app.schema import canonical as canon
+from app.schema import dynamic as dyn
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +104,7 @@ def classify_intents(query: str) -> list[str]:
 # How the subset was chosen, reported as `metadata.retrieval_mode`.
 MODE_INTENT = "intent_map"        # the keyword map matched — the normal path
 MODE_SEMANTIC = "semantic_fallback"  # no intent, embeddings picked the fields
+MODE_FIELDS = "field_match"       # the query named a field the state holds
 MODE_BROAD = "broad_fallback"     # no intent and nothing semantic to add
 MODE_FULL = "full_state"          # small enough that selecting saves nothing
 
@@ -259,6 +261,59 @@ def _entry_field(entry: Any) -> str:
     return str(entry.get("field", "")) if isinstance(entry, dict) else str(entry)
 
 
+def _forms(word: str) -> set[str]:
+    """A word and its singular, for matching only.
+
+    `dyn._same_word` needs a four-character shared stem, so "kits" and "kit"
+    do not match — and "how many kits can the budget cover" then misses
+    `dynamic.kit_invoice`, which is exactly the field the answer needs. Handled
+    here rather than by loosening the shared stemmer: that one also decides
+    which concept a retraction removes, and it reaches the stored state.
+    """
+    forms = {word}
+    for suffix in ("es", "s"):
+        if len(word) > len(suffix) + 1 and word.endswith(suffix):
+            forms.add(word[: -len(suffix)])
+    return forms
+
+
+def _fields_named_in(query: str, full_state: dict[str, Any]) -> set[str]:
+    """Fields the query names outright, matched against the state's own paths.
+
+    `INTENT_FIELD_MAP` is a fixed keyword list built around shopping and code
+    briefs. Nothing in it can classify "how many trucks do we have" — so on
+    every domain it was not written for, the map scores zero and selection
+    falls through to disclosing everything.
+
+    This asks a different question: does the query mention a field this state
+    actually has? "trucks" and `dynamic.truck_count` share a word once both are
+    stemmed, so the field is selected. "Tell me a joke" shares a word with
+    nothing, so nothing is selected and minimal disclosure is preserved — which
+    is the property that makes this safe to run before the size fallback.
+
+    Domain-agnostic by construction: it reads the field names in front of it
+    rather than a vocabulary someone has to remember to extend.
+    """
+    wanted = {v for w in dyn.content_words(query) for v in _forms(w)}
+    if not wanted:
+        return set()
+
+    hits: set[str] = set()
+    for section, block in full_state.items():
+        if not isinstance(block, dict) or section in _NEVER_DISCLOSED:
+            continue
+        for dotted in canon.leaf_paths_in(block, section):
+            # the leaf, not the section: "constraints.budget.max" is named by
+            # "budget", and nobody asks about "constraints"
+            leaf = dotted.split(".", 1)[1].replace("_", " ").replace(".", " ")
+            leaf_words = {v for w in dyn.content_words(leaf) for v in _forms(w)}
+            if wanted & leaf_words or any(
+                dyn._same_word(w, l) for w in wanted for l in leaf_words
+            ):
+                hits.add(dotted)
+    return hits
+
+
 def retrieve_minimum(query: str, full_state: dict[str, Any]) -> dict[str, Any]:
     """Return the minimal state subset needed to answer `query`, with metadata."""
     intents = classify_intents(query)
@@ -274,9 +329,20 @@ def retrieve_minimum(query: str, full_state: dict[str, Any]) -> dict[str, Any]:
     # The semantic layer is a fallback, never an override: it is consulted
     # only when the intent map found nothing, so an enabled model can never
     # change the subset for a query that already matched.
-    mode = MODE_INTENT if patterns else MODE_BROAD
-    semantic_hits: set[str] = set()
-    if not patterns and _semantic_enabled():
+    # Fields the query names outright. Added to whatever the keyword map found
+    # rather than used only when it found nothing: the map's patterns are
+    # coarse, and "how many kits can the budget cover" matches the budget
+    # intent, which returns `constraints.*` and leaves `dynamic.kit_invoice`
+    # behind — the query names both, and the answer needs both. Union only, so
+    # this can widen a subset and never narrow one.
+    named = _fields_named_in(query, full_state)
+    mode = MODE_INTENT if patterns else (MODE_FIELDS if named else MODE_BROAD)
+    semantic_hits: set[str] = set(named)
+
+    # The semantic layer is a fallback, never an override: it is consulted
+    # only when nothing cheaper matched, so an enabled model can never change
+    # the subset for a query that already matched.
+    if not patterns and not semantic_hits and _semantic_enabled():
         matched = _semantic_fields(query, full_state)
         if matched:
             semantic_hits = set(matched)

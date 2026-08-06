@@ -121,3 +121,63 @@ def test_classify_multiple_intents() -> None:
     assert "booking" in intents
     assert "budget" in intents
     assert "contact" in intents
+
+
+# --- field-name matching ------------------------------------------------------
+#
+# INTENT_FIELD_MAP is a fixed keyword list built around shopping and code
+# briefs. In any other domain it scores zero, selection falls through, and the
+# whole state is disclosed on every turn. These cover the layer that reads the
+# state's own field names instead, which is what lets selection engage in a
+# domain nobody wrote keywords for.
+
+RELIEF_STATE = {
+    "facts": {"name": "Meera Nair", "email": "meera@reliefnet.org"},
+    "constraints": {
+        "budget": {"max": {"value": 2200000, "currency": "INR"}},
+        "deadline": {"iso": "2026-08-19", "raw": "19 August"},
+    },
+    "dynamic": {
+        "truck_count": {"concept": "truck count", "type": "count", "value": 5},
+        "kit_invoice": {"concept": "kit invoice", "type": "money",
+                        "value": 850, "currency": "INR"},
+        "tarpaulin_count": {"concept": "tarpaulin count", "type": "count", "value": 600},
+    },
+}
+
+
+def test_a_query_naming_a_field_selects_it() -> None:
+    result = retrieve_minimum("How many trucks do we have now?", RELIEF_STATE)
+    assert result["metadata"]["subset_keys"] == ["dynamic.truck_count"]
+    assert result["metadata"]["retrieval_mode"] == "field_match"
+
+
+def test_plurals_match_their_field() -> None:
+    """`_same_word` needs a four-character stem, so "kits"/"kit" misses and the
+    answer loses the field it needed."""
+    keys = retrieve_minimum("how many kits can we cover?", RELIEF_STATE)["metadata"]["subset_keys"]
+    assert "dynamic.kit_invoice" in keys
+
+
+def test_field_matching_widens_an_intent_match_never_narrows_it() -> None:
+    """"budget" hits the intent map, which returns `constraints.*` and stops —
+    leaving `dynamic.kit_invoice` behind on a question that names both."""
+    keys = retrieve_minimum(
+        "How many kits can we cover with the current budget?", RELIEF_STATE
+    )["metadata"]["subset_keys"]
+    assert "constraints.budget.max" in keys      # from the intent map
+    assert "dynamic.kit_invoice" in keys         # from the field name
+
+
+def test_an_unrelated_query_still_discloses_nothing() -> None:
+    """The property that makes this safe to run before the size fallback:
+    matching on field names must not become "disclose everything"."""
+    result = retrieve_minimum("Tell me a joke", RELIEF_STATE)
+    assert result["subset"] == {}
+    assert result["metadata"]["retrieval_mode"] == "broad_fallback"
+
+
+def test_field_matching_reads_the_leaf_not_the_section() -> None:
+    """Nobody asks about "constraints"; they ask about the deadline."""
+    keys = retrieve_minimum("what is the deadline again?", RELIEF_STATE)["metadata"]["subset_keys"]
+    assert keys == ["constraints.deadline"]
