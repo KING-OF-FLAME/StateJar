@@ -142,11 +142,14 @@ Days later, in a brand-new session:
 
 | Approach | What actually happens | Cost |
 |---|---|---|
-| Full replay | Re-sends the entire chat history to find the answer | ~350 tokens |
+| Full replay | Re-sends the entire chat history to find the answer | 416 tokens |
 | Vector recall | Retrieves *similar-looking* text — may or may not contain the budget | unpredictable |
-| **StateJar** | Reaches into the jar for only the fields it needs: **email · ₹2000 · delivery time (unresolved)** | **~61 tokens** |
+| **StateJar** | Reaches into the jar for only the field the question names | **179 tokens (−57%)** |
 
-*(Token figures measured by the [benchmark suite](backend/benchmarks/results.md) on the booking turn of a 30-turn conversation.)*
+*(Turn 36 of the `relief-40-mixed` run, measured 2026-08-06 — see
+[Benchmark](#benchmark). Earlier turns are **negative**: the fixed instruction
+block costs more than a short transcript. The Benchmark section gives the
+whole-conversation figure and the crossover rather than this turn alone.)*
 
 The transcript never touches the LLM — it was never even stored.
 
@@ -166,7 +169,7 @@ The transcript never touches the LLM — it was never even stored.
 
 ## 📈 Benefits
 
-* **Fewer tokens on long conversations** — and *more* on short ones. The crossover is near turn 14 on the 17-turn demo; the [Benchmark](#benchmark) section states both numbers and their baselines rather than quoting the flattering one.
+* **Fewer tokens on long conversations** — and *more* on short ones. The 17-turn demo never crosses over at all (−136.8% over the run); the 40-turn one crosses at turn 28 and is −9.1% over the whole run. The [Benchmark](#benchmark) section states both, with their baselines, rather than quoting the flattering one.
 * **Lower inference cost**
 * **Faster response time**
 * **Reduced context-window pressure**
@@ -287,40 +290,103 @@ Deployed as FastAPI + MySQL on **Railway**, static frontend on **Vercel**.
 
 ## Benchmark
 
-**Read the scope before quoting the number.** Two different measurements exist
-in this project and they answer different questions:
+**Methodology, in two sentences.** The baseline is a full-transcript replay:
+every prior turn re-sent on every request, which is what a memoryless client
+does. StateJar's figure is the system context it actually sends plus the
+current message, and the saving is `1 - sent / replayed` — counted with
+tiktoken `cl100k_base`, no LLM calls, offline and reproducible.
 
-| Measurement | Baseline | Result |
-|---|---|---|
-| `benchmarks/benchmark.py` — scripted 30-turn, 3-session run | full-transcript replay | −70.7% tokens |
-| The in-app 17-turn relief demo | full-transcript replay | **−20% at turn 5, +18% at turn 17**, crossover near turn 14 |
+### The per-conversation figures — measured 2026-08-06
 
-The second is the honest one to plan around: **savings are negative early**.
-With three short messages there is less to replay than a state plus its
-scaffolding costs, and the demo shows those turns rather than starting the chart
-where it looks good. The gap opens as the conversation grows, because a
-transcript grows without bound and state does not.
+These are the numbers. Everything below is derived from them.
 
-Token savings is therefore **not** offered here as the headline benefit. The
-headline is that the memory is deterministic, inspectable, and refuses to guess.
-Savings are a consequence, and a conversation-length-dependent one.
+| Demo | Turns | Replay total | StateJar total | Whole-conversation | Crossover |
+|---|---:|---:|---:|---:|---:|
+| relief-17 (the in-app demo) | 17 | 2,169 | 5,137 | **−136.8%** | never |
+| relief-40-mixed | 40 | 9,874 | 10,777 | **−9.1%** | **turn 28** |
+
+**Both are negative over the whole conversation, and we publish them that way.**
+StateJar pays a fixed ~158-token instruction block on every turn before it
+sends a single fact — 50% of everything it sends across the 40-turn run — and a
+short conversation never earns that back. A replay of three short turns is
+genuinely cheaper than a state plus its scaffolding, and hiding that would be
+the easiest thing in this repository to catch.
+
+*Crossover* is the first turn from which the per-turn saving stays positive to
+the end. After it, on relief-40-mixed:
+
+| Turns 28–40 | Replay | StateJar | Saved |
+|---|---:|---:|---:|
+| Marginal rate once state stops growing | 5,113 | 2,613 | **48.9%** |
+| Final turn (40) | 467 | 224 | **52.0%** |
+
+That is the number that describes a conversation which keeps going, and it is a
+*marginal* rate for turns 28–40 — not the whole-conversation figure, which is
+−9.1%.
+
+### Per turn
+
+relief-17 — selective retrieval never engages; state stays under the threshold
+the whole way:
+
+| Turn | Replay | Sent | Saved | Fields | Mode |
+|---:|---:|---:|---:|---:|---|
+| 1 | 19 | 192 | −910.5% | 1 | `full_state` |
+| 5 | 78 | 274 | −251.3% | 8 | `full_state` |
+| 9 | 128 | 310 | −142.2% | 12 | `full_state` |
+| 13 | 183 | 331 | −80.9% | 14 | `full_state` |
+| 17 | 226 | 366 | −61.9% | 17 | `full_state` |
+
+relief-40-mixed — 16 facts, 14 questions, 8 revisions, 2 retractions. Selection
+engages at turn 28, when the state finally passes the threshold:
+
+| Turn | Replay | Sent | Saved | Fields | Mode |
+|---:|---:|---:|---:|---:|---|
+| 1 | 19 | 192 | −910.5% | 1 | `full_state` |
+| 8 | 118 | 292 | −147.5% | 10 | `full_state` |
+| 16 | 200 | 326 | −63.0% | 13 | `full_state` |
+| 24 | 289 | 367 | −27.0% | 17 | `full_state` |
+| **28** | 325 | 213 | **+34.5%** | 5 | `field_match` |
+| 32 | 369 | 203 | +45.0% | 2 | `intent_map` |
+| 36 | 416 | 179 | +57.0% | 1 | `field_match` |
+| 40 | 467 | 224 | +52.0% | 5 | `field_match` |
+
+Full 40-row tables and the CSV: [`backend/benchmarks/results.md`](backend/benchmarks/results.md).
+Run it yourself: `python benchmarks/benchmark.py`.
+
+### Cumulative illustration — an extrapolation, not a measurement
+
+Multiplying the measured per-conversation figure by a conversation count. It is
+arithmetic on the number above, not a second measurement, and it cannot be
+better than that number:
+
+> **N = 1,000 conversations of exactly the relief-40-mixed shape.**
+> At the measured −9.1%, StateJar sends **10,777,000** tokens where a replay
+> sends **9,874,000** — **903,000 tokens *more*, not fewer.**
+
+The whole-conversation figure is negative, so the aggregate is negative too.
+That is what honest extrapolation looks like when the per-conversation number
+has not crossed over. If the conversations run past turn 28, the marginal 48.9%
+applies only to the turns after it — never to the whole run.
+
+**Never quote an aggregate without the per-conversation figure beside it.**
+
+### Determinism
+
+| Check | Result |
+|---|---|
+| 100 canonicalize+hash runs, shuffled key order | **1/100 unique handle ✅** |
+| Repeated query returns a byte-identical subset | **yes ✅** |
+| Same conversation, separate processes, same handle | **yes ✅** |
+| Median canonicalize+hash latency (19-field state) | ~17 ms |
 
 There is **no accuracy benchmark**. No labelled evaluation set exists for this
 project, so no extraction-accuracy figure appears anywhere in this README — and
 any such number you see quoted about StateJar, including from us, is unmeasured.
 
-Measured by [`backend/benchmarks/benchmark.py`](backend/benchmarks/benchmark.py) — a scripted 30-turn, 3-session conversation through the real memory core (no LLM calls, tiktoken `cl100k_base`, offline):
-
-| Metric | Full replay | StateJar |
-|---|---|---|
-| Total tokens sent (30 turns) | 5,808 | **1,699 (−70.7%)** |
-| Mean context per turn | 193.6 tokens | **56.6 tokens** |
-| Cost for the run (gpt-4o-mini input rate) | $0.000871 | **$0.000255 (−70.7%)** |
-| Determinism (100 shuffled-key canonicalize+hash runs) | — | **1/100 unique handle ✅** |
-| Repeated query returns an identical subset | — | **yes ✅** |
-| Median canonicalize+hash latency | — | **~1.8 ms** |
-
-Full report with per-turn CSV: [`backend/benchmarks/results.md`](backend/benchmarks/results.md). Run it yourself: `python benchmarks/benchmark.py`.
+Token savings is **not** the headline benefit. The headline is that the memory
+is deterministic, inspectable, and refuses to guess. Savings are a consequence,
+and a conversation-length-dependent one.
 
 ## 📚 Documentation
 

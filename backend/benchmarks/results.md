@@ -3,7 +3,7 @@
 Generated **2026-08-06** by `python benchmarks/benchmark.py` —
 deterministic, offline, no LLM calls. Token counts: tiktoken `cl100k_base`.
 Pricing: OpenRouter `openai/gpt-4o-mini` ($0.15 / 1M input tokens).
-`RETRIEVER_FULL_STATE_TOKENS = 800`.
+`RETRIEVER_FULL_STATE_TOKENS = 400`.
 
 **Baseline** is a full-transcript replay: every prior turn re-sent on every
 request. **StateJar** sends the retrieved subset plus the current message.
@@ -13,7 +13,8 @@ baseline; neither was changed to move a number.
 | Demo | Turns | Sessions | Replay total | StateJar total | Saved | Crossover |
 |---|---:|---:|---:|---:|---:|---:|
 | relief-17 (shipped UI demo) | 17 | 1 | 2,169 | 5,137 | **-136.8%** | never |
-| relief-40 (3-session operation) | 40 | 3 | 9,955 | 14,616 | **-46.8%** | never |
+| relief-40-mixed (facts/questions/revisions) | 40 | 1 | 9,874 | 10,777 | **-9.1%** | 28 |
+| relief-40-cross (3 sessions, fact-heavy) | 40 | 3 | 9,955 | 9,819 | **1.4%** | 20 |
 
 *Crossover* is the first turn from which the per-turn saving stays positive
 for the rest of the conversation.
@@ -41,7 +42,7 @@ working against StateJar here, and it is left in place because changing the
 baseline to improve a number is exactly what should not be done.
 
 If the replay client sent the identical block, the same conversations measure
-**-8.1%** and **8.8%**. That is a sensitivity check, not the
+**-8.1%** and **32.4%**. That is a sensitivity check, not the
 headline; the headline is the table above.
 
 **Selective retrieval does not engage on either demo.** Both states stay under
@@ -78,64 +79,60 @@ size, not answer quality.
 | 16 | 1 | 212 | 360 | -69.8% | 17 | `full_state` |
 | 17 | 1 | 226 | 366 | -61.9% | 17 | `full_state` |
 
-## relief-40 — per turn
-
-Sessions 2 and 3 open cold: the state is re-loaded from its handle
-(2 restores), so every answer after turn 14 is
-drawn from retrieved state and never from the transcript.
+## relief-40-mixed — per turn
 
 | Turn | S | Replay would send | StateJar sent | Saved | Fields | Mode |
 |---:|---:|---:|---:|---:|---:|---|
 | 1 | 1 | 19 | 192 | -910.5% | 1 | `full_state` |
 | 2 | 1 | 37 | 206 | -456.8% | 3 | `full_state` |
 | 3 | 1 | 51 | 214 | -319.6% | 4 | `full_state` |
-| 4 | 1 | 67 | 239 | -256.7% | 6 | `full_state` |
-| 5 | 1 | 85 | 260 | -205.9% | 8 | `full_state` |
-| 6 | 1 | 96 | 291 | -203.1% | 10 | `full_state` |
-| 7 | 1 | 105 | 289 | -175.2% | 10 | `full_state` |
-| 8 | 1 | 117 | 301 | -157.3% | 11 | `full_state` |
-| 9 | 1 | 128 | 311 | -143.0% | 12 | `full_state` |
-| 10 | 1 | 137 | 324 | -136.5% | 13 | `full_state` |
-| 11 | 1 | 148 | 324 | -118.9% | 13 | `full_state` |
-| 12 | 1 | 158 | 323 | -104.4% | 13 | `full_state` |
-| 13 | 1 | 167 | 329 | -97.0% | 14 | `full_state` |
-| 14 | 1 | 175 | 338 | -93.1% | 15 | `full_state` |
-| 15 | 2 | 194 | 368 | -89.7% | 17 | `full_state` |
-| 16 | 2 | 202 | 357 | -76.7% | 17 | `full_state` |
-| 17 | 2 | 212 | 374 | -76.4% | 18 | `full_state` |
-| 18 | 2 | 226 | 366 | -61.9% | 17 | `full_state` |
-| 19 | 2 | 236 | 362 | -53.4% | 17 | `full_state` |
-| 20 | 2 | 247 | 378 | -53.0% | 18 | `full_state` |
-| 21 | 2 | 257 | 383 | -49.0% | 19 | `full_state` |
-| 22 | 2 | 271 | 387 | -42.8% | 19 | `full_state` |
-| 23 | 2 | 279 | 387 | -38.7% | 20 | `full_state` |
-| 24 | 2 | 292 | 392 | -34.2% | 20 | `full_state` |
-| 25 | 2 | 300 | 387 | -29.0% | 20 | `full_state` |
-| 26 | 2 | 309 | 402 | -30.1% | 21 | `full_state` |
-| 27 | 2 | 322 | 406 | -26.1% | 21 | `full_state` |
-| 28 | 3 | 332 | 407 | -22.6% | 22 | `full_state` |
-| 29 | 3 | 343 | 408 | -19.0% | 22 | `full_state` |
-| 30 | 3 | 355 | 427 | -20.3% | 23 | `full_state` |
-| 31 | 3 | 364 | 426 | -17.0% | 24 | `full_state` |
-| 32 | 3 | 372 | 425 | -14.2% | 24 | `full_state` |
-| 33 | 3 | 381 | 440 | -15.5% | 25 | `full_state` |
-| 34 | 3 | 392 | 452 | -15.3% | 26 | `full_state` |
-| 35 | 3 | 404 | 453 | -12.1% | 26 | `full_state` |
-| 36 | 3 | 415 | 449 | -8.2% | 26 | `full_state` |
-| 37 | 3 | 426 | 460 | -8.0% | 27 | `full_state` |
-| 38 | 3 | 433 | 456 | -5.3% | 27 | `full_state` |
-| 39 | 3 | 443 | 459 | -3.6% | 27 | `full_state` |
-| 40 | 3 | 458 | 464 | -1.3% | 27 | `full_state` |
+| 4 | 1 | 67 | 236 | -252.2% | 6 | `full_state` |
+| 5 | 1 | 76 | 229 | -201.3% | 6 | `full_state` |
+| 6 | 1 | 94 | 260 | -176.6% | 8 | `full_state` |
+| 7 | 1 | 107 | 255 | -138.3% | 8 | `full_state` |
+| 8 | 1 | 118 | 292 | -147.5% | 10 | `full_state` |
+| 9 | 1 | 126 | 289 | -129.4% | 10 | `full_state` |
+| 10 | 1 | 138 | 301 | -118.1% | 11 | `full_state` |
+| 11 | 1 | 149 | 316 | -112.1% | 12 | `full_state` |
+| 12 | 1 | 160 | 313 | -95.6% | 12 | `full_state` |
+| 13 | 1 | 170 | 312 | -83.5% | 12 | `full_state` |
+| 14 | 1 | 179 | 321 | -79.3% | 13 | `full_state` |
+| 15 | 1 | 187 | 320 | -71.1% | 13 | `full_state` |
+| 16 | 1 | 200 | 326 | -63.0% | 13 | `full_state` |
+| 17 | 1 | 208 | 321 | -54.3% | 13 | `full_state` |
+| 18 | 1 | 217 | 329 | -51.6% | 14 | `full_state` |
+| 19 | 1 | 228 | 347 | -52.2% | 15 | `full_state` |
+| 20 | 1 | 237 | 345 | -45.6% | 15 | `full_state` |
+| 21 | 1 | 251 | 331 | -31.9% | 14 | `full_state` |
+| 22 | 1 | 262 | 328 | -25.2% | 14 | `full_state` |
+| 23 | 1 | 270 | 337 | -24.8% | 15 | `full_state` |
+| 24 | 1 | 289 | 367 | -27.0% | 17 | `full_state` |
+| 25 | 1 | 297 | 356 | -19.9% | 17 | `full_state` |
+| 26 | 1 | 308 | 362 | -17.5% | 17 | `full_state` |
+| 27 | 1 | 316 | 359 | -13.6% | 17 | `full_state` |
+| 28 | 1 | 325 | 213 | 34.5% | 5 | `field_match` |
+| 29 | 1 | 336 | 215 | 36.0% | 5 | `field_match` |
+| 30 | 1 | 345 | 177 | 48.7% | 1 | `field_match` |
+| 31 | 1 | 356 | 185 | 48.0% | 1 | `field_match` |
+| 32 | 1 | 369 | 203 | 45.0% | 2 | `intent_map` |
+| 33 | 1 | 380 | 222 | 41.6% | 4 | `intent_map` |
+| 34 | 1 | 390 | 200 | 48.7% | 3 | `field_match` |
+| 35 | 1 | 404 | 215 | 46.8% | 5 | `field_match` |
+| 36 | 1 | 416 | 179 | 57.0% | 1 | `field_match` |
+| 37 | 1 | 430 | 184 | 57.2% | 1 | `field_match` |
+| 38 | 1 | 441 | 190 | 56.9% | 1 | `field_match` |
+| 39 | 1 | 454 | 206 | 54.6% | 2 | `intent_map` |
+| 40 | 1 | 467 | 224 | 52.0% | 5 | `field_match` |
 
 ## Determinism & latency
 
-Measured on the relief-40 final state.
+Measured on the relief-40-mixed final state.
 
 | Check | Result |
 |---|---|
 | 100 canonicalize+hash runs, shuffled key order | **1/100 unique handle** ✅ |
 | Shuffled handles match the live pipeline handle | ❌ FAIL |
-| Median canonicalize+hash latency | **12.166 ms** |
+| Median canonicalize+hash latency | **17.263 ms** |
 | Repeated query → byte-identical subset | ✅ PASS |
 
-Final handle: `shm_609e5524c00cb017531995fbc27c016a5fcdbe04`
+Final handle: `shm_16b75da655b265e8f57f9abb9d826e1b84fcdc34`

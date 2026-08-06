@@ -208,7 +208,7 @@ def _summary_row(name: str, res: dict) -> str:
 
 def main() -> int:
     results = {name: run_conversation(turns) for name, turns in DEMOS.items()}
-    headline = results["relief-40"]
+    headline = results["relief-40-mixed"]
     det = run_determinism_checks(headline["final_state"], headline["final_handle"])
     settings = get_settings()
 
@@ -234,7 +234,9 @@ def main() -> int:
         ]
     (OUT_DIR / "results.csv").write_text("\n".join(csv) + "\n", encoding="utf-8")
 
-    r17, r40 = results["relief-17"], results["relief-40"]
+    r17 = results["relief-17"]
+    r40 = results["relief-40-mixed"]
+    rxs = results["relief-40-cross"]
 
     # The fixed cost StateJar pays every turn and the bare-transcript baseline
     # never does. Reported as a caveat, never folded into the headline.
@@ -244,7 +246,7 @@ def main() -> int:
                            (res["baseline_total_tokens"] + fixed_overhead * res["turns"])), 1)
         for name, res in results.items()
     }
-    sens_17, sens_40 = sens["relief-17"], sens["relief-40"]
+    sens_17, sens_40 = sens["relief-17"], sens["relief-40-mixed"]
     payload["fixed_per_turn_overhead_tokens"] = fixed_overhead
     payload["sensitivity_if_baseline_sent_same_system_prompt"] = sens
 
@@ -263,7 +265,8 @@ baseline; neither was changed to move a number.
 | Demo | Turns | Sessions | Replay total | StateJar total | Saved | Crossover |
 |---|---:|---:|---:|---:|---:|---:|
 {_summary_row('relief-17 (shipped UI demo)', r17)}
-{_summary_row('relief-40 (3-session operation)', r40)}
+{_summary_row('relief-40-mixed (facts/questions/revisions)', r40)}
+{_summary_row('relief-40-cross (3 sessions, fact-heavy)', rxs)}
 
 *Crossover* is the first turn from which the per-turn saving stays positive
 for the rest of the conversation.
@@ -310,17 +313,13 @@ size, not answer quality.
 
 {_per_turn_table(r17)}
 
-## relief-40 — per turn
-
-Sessions 2 and 3 open cold: the state is re-loaded from its handle
-({r40['cross_session_restores']} restores), so every answer after turn 14 is
-drawn from retrieved state and never from the transcript.
+## relief-40-mixed — per turn
 
 {_per_turn_table(r40)}
 
 ## Determinism & latency
 
-Measured on the relief-40 final state.
+Measured on the relief-40-mixed final state.
 
 | Check | Result |
 |---|---|
