@@ -362,7 +362,10 @@ export function LineageChart({ lineage }) {
         label: STEP_KINDS[k].label, color: STEP_KINDS[k].color,
       }))} />
 
-      <div className="chart-wrap">
+      {/* `chart-scroll` opts this one out of the mobile scale-to-fit: a 16-dot
+          chain squeezed into a phone card is a 0.3 scale, which is ~4px type.
+          A long chain scrolls; it does not shrink. */}
+      <div className="chart-wrap chart-scroll">
         {tip}
         <svg viewBox={`0 0 ${W} ${H}`} width={W} height={H} className="chart-svg"
              role="img"

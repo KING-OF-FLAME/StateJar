@@ -2011,6 +2011,10 @@ body.presenter-mode .card, body.presenter-mode .panel { border-color: #D8D2C8; }
      "18" and "16" were simply not on screen. Fitting shrinks the type a little
      and shows the whole chart, which is the better trade on a phone. */
   .chart-svg { max-width: 100%; height: auto; }
+  /* ...except a chart that is wide because it has many marks rather than
+     because it is drawn large. Fitting a 16-dot chain into a phone card is a
+     0.3 scale and ~4px labels; that one scrolls. */
+  .chart-scroll .chart-svg { max-width: none; }
   /* the table is the fallback view on a narrow screen, so it must scroll
      rather than crush its columns to one character each */
   .chart-table { overflow-x: auto; }
