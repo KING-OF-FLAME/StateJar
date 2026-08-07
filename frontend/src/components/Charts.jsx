@@ -21,7 +21,14 @@ const MUTED = '#8A8A9A'          // superseded: deliberately recessive
 const LINE = '#E8E3DC'
 const INK_SOFT = '#4A4A5E'
 const INK_FAINT = '#8A8A9A'
-const MAX_SERIES = 4             // a 5th reason folds into "Other", never a new hue
+const MAX_SERIES = 3             // a 4th reason folds into "Other", never a new hue
+/* Small counts beside a large one round to nothing: a day with 2 declines next
+   to a day with 192 computes to under a pixel and disappears. The bar is held
+   at this height so it stays visible, which means the smallest bars are no
+   longer to scale — so every bar carries its number, and the caption says so.
+   The alternative, a log axis, is only honest if it is labelled and is harder
+   to read at a glance; dropping the outlier would not be honest at all. */
+const MIN_BAR = 6
 
 /* A rect with only some corners rounded, so the rounding lands on the data end
    and never on the baseline. */
@@ -183,9 +190,16 @@ export function DeclineChart({ declines }) {
   /* A fixed slot rather than dividing the card between however many days there
      happen to be: two buckets across a full-width chart marooned one bar at
      each end with nothing between them. */
-  const H = 190, PAD_B = 32, PAD_T = 20, slot = 66
+  const H = 190, PAD_B = 32, PAD_T = 26, slot = 66
   const W = Math.max(198, folded.length * slot)
   const bw = 34
+  const PLOT = H - PAD_B - PAD_T
+
+  /* Height for one segment, floored so a count of 1 beside a count of 192 is
+     still something you can see and hover. The floor is applied per segment
+     and the stack is then clamped to the plot, so a tall bar cannot be pushed
+     off the top by the floors underneath it. */
+  const heightOf = (n) => (n > 0 ? Math.max(MIN_BAR, (n / max) * PLOT) : 0)
 
   return (
     <figure className="chart-fig">
@@ -193,7 +207,9 @@ export function DeclineChart({ declines }) {
         <h3>Declines by reason</h3>
         <p className="page-sub">
           What the extractor refused, and why. Each refusal is counted on the
-          turn that produced it — the reason is recorded rather than guessed at.
+          turn that produced it. Days with no declines are left off the axis;
+          a bar too small to see is held at a minimum height, so read the
+          number above it rather than the height.
         </p>
       </figcaption>
       <Legend items={series.map((r) => ({ label: r, color: colorOf(r) }))} />
@@ -205,24 +221,30 @@ export function DeclineChart({ declines }) {
           <line x1="0" y1={H - PAD_B} x2={W} y2={H - PAD_B} stroke={LINE} strokeWidth="1" />
           {folded.map((b, i) => {
             const cx = i * slot + slot / 2
-            let y = H - PAD_B
             const present = series.filter((r) => b.counts[r])
+            const raw = present.map((r) => heightOf(b.counts[r]))
+            const stack = raw.reduce((a, c) => a + c, 0)
+            const scale = stack > PLOT ? PLOT / stack : 1
+            let y = H - PAD_B
             return (
               <g key={b.date}>
                 {present.map((r, j) => {
-                  const bh = ((b.counts[r]) / max) * (H - PAD_B - PAD_T)
+                  const bh = raw[j] * scale
                   const isTop = j === present.length - 1
                   y -= bh
-                  const drawn = j === 0 ? bh : Math.max(0, bh - 2)
+                  const drawn = j === 0 ? bh : Math.max(1, bh - 2)
                   return (
                     <path key={r}
                           d={bar(cx - bw / 2, y, bw, drawn, 4,
                                  { tl: isTop, tr: isTop })}
                           fill={colorOf(r)}
-                          {...bind([b.date, `${r}: ${b.counts[r]}`])} />
+                          {...bind([b.date, `${r}: ${b.counts[r]}`,
+                                    `day total: ${b.total}`])} />
                   )
                 })}
-                <text x={cx} y={y - 6} textAnchor="middle" className="chart-val">
+                {/* every bar carries its number, because the smallest ones are
+                    held above their true height to stay visible */}
+                <text x={cx} y={y - 7} textAnchor="middle" className="chart-val">
                   {b.total}
                 </text>
                 <text x={cx} y={H - PAD_B + 18} textAnchor="middle" className="chart-cat">
@@ -244,38 +266,61 @@ export function DeclineChart({ declines }) {
 
 /* ---- 3. Handle lineage --------------------------------------------------- */
 
-/* Session tags are free text and routinely longer than the label gutter. The
-   text is end-anchored, so an over-long one ran off the left edge and was
-   clipped there — "spanfix-1785910318" rendered as "fix-1785910318", which
-   reads as a different session rather than as a truncation, on a chart whose
-   whole subject is identity.
+/* Session tags used to be drawn into a fixed left gutter, one row per session,
+   and an over-long tag clipped there — "spanfix-1785910318" rendering as
+   "fix-1785910318", which reads as a different session rather than as a
+   truncation. There is no gutter now: one session is shown at a time and its
+   tag is the full string in the selector, so the clipping problem is gone
+   rather than mitigated.
 
-   Capping the characters is only half of it: the cap has to fit the gutter, or
-   the truncated label clips as well and you get "panfix-17859…". A character
-   count cannot promise that on its own — 13 average characters measure ~85px
-   but 13 wide ones measure ~133px — so the label is anchored at the *start*
-   and clipped to the gutter. Whatever happens, the tag's opening characters
-   are the ones on screen and the ellipsis says it was cut, instead of a tail
-   that reads as some other session. The full tag stays in the hover title, the
-   tooltip and the table. */
-const LABEL_CHARS = 13
-const LABEL_PX = 124
-const LABEL_CLIP = 'sj-lineage-label-clip'
-
-function shortTag(tag) {
-  const t = String(tag || '')
-  return t.length > LABEL_CHARS ? `${t.slice(0, LABEL_CHARS - 1)}…` : t
+   What changed between two consecutive states, from the field count alone.
+   The payload carries `fields` and `declines` per version and nothing else, so
+   this reports exactly what those two support and hedges where they do not:
+   a count that did not move means a value was replaced in place OR nothing new
+   was extracted, and there is no way to tell which from here. Claiming
+   "superseded" on that would be a guess rendered as a fact, on the one chart
+   whose subject is that we do not guess. */
+const STEP_KINDS = {
+  start: { color: SERIES[0], label: 'first state' },
+  add: { color: SERIES[0], label: 'field added' },
+  drop: { color: SERIES[2], label: 'field left active state' },
+  same: { color: MUTED, label: 'no new field' },
 }
+
+function stepsOf(versions) {
+  return versions.map((v, i) => {
+    const prev = versions[i - 1]
+    const declined = v.declines > 0
+    if (!prev) return { kind: 'start', mark: `${v.fields}`, declined }
+    const delta = v.fields - prev.fields
+    if (delta > 0) return { kind: 'add', mark: `+${delta}`, declined }
+    if (delta < 0) return { kind: 'drop', mark: `${delta}`, declined }
+    return { kind: 'same', mark: '=', declined }
+  })
+}
+
+const lastAt = (s) => s.versions[s.versions.length - 1].created_at || ''
 
 export function LineageChart({ lineage }) {
   const [tip, bind] = useTip()
   const chains = (lineage || []).filter((s) => s.versions.length)
+  const recent = [...chains].sort((a, b) => lastAt(b).localeCompare(lastAt(a)))
+  const [picked, setPicked] = useState('')
   if (!chains.length) return null
 
-  const widest = Math.max(...chains.map((s) => s.versions.length))
-  const STEP = 52, R = 7, LABEL = LABEL_PX, ROW = 48
-  const W = LABEL + Math.max(1, widest - 1) * STEP + 40
-  const H = chains.length * ROW
+  /* One session, not all of them. Twenty near-identical two-dot rows stacked
+     down the page cost a screenful and proved nothing that one detailed chain
+     does not prove better; the rest move behind the selector. */
+  const chain = recent.find((s) => s.session_tag === picked) || recent[0]
+  const steps = stepsOf(chain.versions)
+  const kinds = [...new Set(steps.map((s) => s.kind))]
+
+  const STEP = 62, R = 8, PAD_X = 26, MID = 52
+  const W = PAD_X * 2 + Math.max(1, chain.versions.length - 1) * STEP
+  const H = 96
+
+  const handles = chains.reduce((a, s) => a + s.versions.length, 0)
+  const deepest = Math.max(...chains.map((s) => s.versions.length))
 
   return (
     <figure className="chart-fig">
@@ -284,57 +329,85 @@ export function LineageChart({ lineage }) {
         <p className="page-sub">
           Every turn seals a new state and points it at its parent. Nothing is
           edited in place, so the chain is the whole history — each dot is one
-          content-addressed handle.
+          content-addressed handle, marked with what changed at that step.
         </p>
       </figcaption>
-      <div className="chart-wrap chart-scroll">
+
+      <p className="lin-summary">
+        <b>{handles}</b> handles · <b>{chains.length}</b> session{chains.length === 1 ? '' : 's'}
+        {' '}· deepest chain <b>{deepest}</b>
+      </p>
+
+      <div className="lin-controls">
+        <label className="sr-only" htmlFor="lin-session">Session</label>
+        <select id="lin-session" className="lin-select"
+                value={chain.session_tag}
+                onChange={(e) => setPicked(e.target.value)}>
+          {recent.map((s) => (
+            <option key={s.session_tag} value={s.session_tag}>
+              {s.session_tag} · {s.versions.length} handle{s.versions.length === 1 ? '' : 's'}
+            </option>
+          ))}
+        </select>
+        <span className="lin-when">
+          last sealed {(lastAt(chain) || '').replace('T', ' ').slice(0, 16) || '—'}
+        </span>
+      </div>
+
+      {/* `start` is deliberately absent: it shares terracotta with `add`, and
+          two legend rows carrying the same swatch read as a rendering bug. The
+          first dot is self-evidently the first, its mark is the starting field
+          count rather than a delta, and its tooltip names it. */}
+      <Legend items={kinds.filter((k) => k !== 'start').map((k) => ({
+        label: STEP_KINDS[k].label, color: STEP_KINDS[k].color,
+      }))} />
+
+      <div className="chart-wrap">
         {tip}
         <svg viewBox={`0 0 ${W} ${H}`} width={W} height={H} className="chart-svg"
              role="img"
-             aria-label={`Handle lineage for ${chains.length} sessions`}>
-          <defs>
-            <clipPath id={LABEL_CLIP}>
-              <rect x="0" y="0" width={LABEL - 14} height={H} />
-            </clipPath>
-          </defs>
-          {chains.map((s, row) => {
-            const y = row * ROW + ROW / 2
-            const last = LABEL + (s.versions.length - 1) * STEP
+             aria-label={`Handle chain for session ${chain.session_tag}, `
+                         + `${chain.versions.length} states`}>
+          {chain.versions.length > 1 && (
+            <line x1={PAD_X} y1={MID} x2={W - PAD_X} y2={MID}
+                  stroke={LINE} strokeWidth="2" />
+          )}
+          {chain.versions.map((v, i) => {
+            const step = steps[i]
+            const cx = PAD_X + i * STEP
             return (
-              <g key={s.session_tag}>
-                <text x={0} y={y + 4} className="chart-cat"
-                      clipPath={`url(#${LABEL_CLIP})`}>
-                  <title>{s.session_tag}</title>
-                  {shortTag(s.session_tag)}
+              <g key={v.handle}
+                 {...bind([
+                   `v${v.version} · ${STEP_KINDS[step.kind].label}`,
+                   v.handle,
+                   `${v.fields} field${v.fields === 1 ? '' : 's'} active`
+                     + (step.declined ? ` · ${v.declines} declined` : ''),
+                   (v.created_at || '').replace('T', ' ').slice(0, 16),
+                 ])}>
+                <text x={cx} y={MID - 20} textAnchor="middle" className="chart-val">
+                  {step.mark}
                 </text>
-                {s.versions.length > 1 && (
-                  <line x1={LABEL} y1={y} x2={last} y2={y}
-                        stroke={LINE} strokeWidth="2" />
+                {/* 2px surface ring so adjacent dots stay countable */}
+                <circle cx={cx} cy={MID} r={R + 2} fill="#fff" />
+                <circle cx={cx} cy={MID} r={R} fill={STEP_KINDS[step.kind].color} />
+                {step.declined && (
+                  <circle cx={cx + R + 1} cy={MID - R - 1} r="3" fill={SERIES[1]}>
+                    <title>a value was declined on this turn</title>
+                  </circle>
                 )}
-                {s.versions.map((v, i) => (
-                  <g key={v.handle}
-                     {...bind([
-                       `${s.session_tag} · v${v.version}`,
-                       v.handle,
-                       `${v.fields} field${v.fields === 1 ? '' : 's'}`,
-                       v.created_at.replace('T', ' ').slice(0, 16),
-                     ])}>
-                    {/* 2px surface ring so overlapping dots stay countable */}
-                    <circle cx={LABEL + i * STEP} cy={y} r={R + 2} fill="#fff" />
-                    <circle cx={LABEL + i * STEP} cy={y} r={R} fill={SERIES[0]} />
-                    <text x={LABEL + i * STEP} y={y + 22} textAnchor="middle"
-                          className="chart-cat">v{v.version}</text>
-                  </g>
-                ))}
+                <text x={cx} y={MID + 26} textAnchor="middle" className="chart-cat">
+                  v{v.version}
+                </text>
               </g>
             )
           })}
         </svg>
       </div>
+
       <Table
-        caption="Handle lineage per session"
-        head={['Session', 'Versions', 'Latest handle', 'Fields']}
-        rows={chains.map((s) => [
+        caption="Every session, its chain depth and its latest handle"
+        head={['Session', 'Handles', 'Latest handle', 'Fields']}
+        rows={recent.map((s) => [
           s.session_tag,
           s.versions.length,
           s.versions[s.versions.length - 1].handle.slice(0, 18) + '…',

@@ -1973,3 +1973,46 @@ body.presenter-mode .card, body.presenter-mode .panel { border-color: #D8D2C8; }
 }
 .chart-table thead th { color: var(--ink-faint); font-size: 0.72rem; letter-spacing: 0.04em; text-transform: uppercase; }
 .chart-table tbody th { color: var(--ink); }
+
+/* --- handle lineage --------------------------------------------------------
+   One session at a time. The previous version drew every session as its own
+   row, which on a real account was twenty-odd near-identical two-dot chains
+   and most of a screen; the detail that makes the chart worth having — what
+   changed at each step — had nowhere to go. */
+.lin-summary {
+  margin: 0 0 10px; font-size: 0.85rem; color: var(--ink-soft);
+}
+.lin-summary b { color: var(--ink); font-weight: 600; }
+
+.lin-controls {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+  margin-bottom: 12px;
+}
+.lin-select {
+  font: inherit; font-size: 0.83rem; color: var(--ink);
+  padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--card); max-width: 100%;
+}
+.lin-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.lin-when { font-size: 0.76rem; color: var(--ink-faint); }
+
+/* The cap is the point: this chart is not allowed to own the page again. The
+   chain scrolls sideways inside it rather than growing the card downwards. */
+.chart-fig .chart-wrap { max-height: 260px; overflow-y: auto; }
+
+@media (max-width: 700px) {
+  .chart-fig { padding: 16px 14px 12px; }
+  .chart-fig h3 { font-size: 1.05rem; }
+  .lin-controls { gap: 6px 8px; }
+  .lin-select { width: 100%; }
+  /* Scale the drawing to the card instead of scrolling it. The charts carry
+     real width/height so their type stays exactly 12px on a desktop card, but
+     at 390px a 392px-wide chart put its value labels past the right edge —
+     "18" and "16" were simply not on screen. Fitting shrinks the type a little
+     and shows the whole chart, which is the better trade on a phone. */
+  .chart-svg { max-width: 100%; height: auto; }
+  /* the table is the fallback view on a narrow screen, so it must scroll
+     rather than crush its columns to one character each */
+  .chart-table { overflow-x: auto; }
+  .chart-table table { min-width: 380px; }
+}
