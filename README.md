@@ -63,54 +63,6 @@ Most AI systems "remember" you by re-reading your *entire* chat history on every
 
 ---
 
-## 🧷 What StateJar actually guarantees
-
-A memory layer for conversational AI. Three claims, each phrased as what you can
-watch it do in the Playground in under a minute.
-
-**1 · It refuses to guess.** A value passes type validation before it enters
-state. `max load per container is 24 tonnes` classifies as a quantity, and a
-money field will not take a quantity — so it is *declined*, not coerced into a
-budget of twenty-four rupees. Every decline is recorded with a reason and shown
-in the Memory State panel.
-
-**2 · One field, one value.** A `(slot, qualifier)` uniqueness invariant is
-asserted at the STORE boundary, so two values for one concept cannot both be
-current. When you change your mind the old value moves to history and is never
-sent to the model.
-
-**3 · The handle is portable and verifiable.** State is content-addressed:
-serialise it canonically, hash it, and the same bytes always produce the same
-handle. Restoring one re-derives the handle and refuses if they disagree — so a
-restore that succeeds is a verification. Handles cross sessions and model
-vendors, because state is data rather than a feature of somebody's product.
-
-### The pipeline
-
-```
-INGEST → EXTRACT → CANONICALIZE → HANDLE → STORE → RETRIEVE → AUDIT
-```
-
-Extraction runs **before** canonicalization. That order is the argument: a
-probabilistic tier can only ever *propose*, and the deterministic layer decides.
-It is why a language model in the pipeline does not make the pipeline
-probabilistic.
-
-### What runs in production, precisely
-
-Deployed extraction is **rules only**. GLiNER2 (tier 2) needs `gliner` and
-`torch`, which live in `requirements-ml.txt` and are deliberately **not**
-installed on Railway — production builds stay small. Tier 3 (LLM extraction) is
-off by default behind `EXTRACTOR_LLM_FALLBACK`, needs a provider key on the
-calling account, and **has never run in production**. The tier chips in the
-Playground show which tiers actually ran on each turn, including the ones that
-were attempted and failed.
-
-Known gaps are written down rather than hidden: see
-[`docs/known-issues.md`](docs/known-issues.md).
-
----
-
 ## 🕳️ The Problem
 
 Today's conversational AI "remembers" users by shipping the entire prior chat back to the LLM, every single turn. That habit quietly compounds into real costs:
@@ -164,6 +116,54 @@ The transcript never touches the LLM — it was never even stored.
 **3. Seal** — Generate a unique **SHA-256 handle** for the structured state — a secure, deterministic reference, without ever storing the raw transcript.
 
 **4. Retrieve Minimum** — On a new question, pull back only the fields required to answer it. The LLM sees the relevant slice of truth — never the whole jar.
+
+---
+
+## 🧷 What StateJar actually guarantees
+
+A memory layer for conversational AI. Three claims, each phrased as what you can
+watch it do in the Playground in under a minute.
+
+**1 · It refuses to guess.** A value passes type validation before it enters
+state. `max load per container is 24 tonnes` classifies as a quantity, and a
+money field will not take a quantity — so it is *declined*, not coerced into a
+budget of twenty-four rupees. Every decline is recorded with a reason and shown
+in the Memory State panel.
+
+**2 · One field, one value.** A `(slot, qualifier)` uniqueness invariant is
+asserted at the STORE boundary, so two values for one concept cannot both be
+current. When you change your mind the old value moves to history and is never
+sent to the model.
+
+**3 · The handle is portable and verifiable.** State is content-addressed:
+serialise it canonically, hash it, and the same bytes always produce the same
+handle. Restoring one re-derives the handle and refuses if they disagree — so a
+restore that succeeds is a verification. Handles cross sessions and model
+vendors, because state is data rather than a feature of somebody's product.
+
+### The pipeline
+
+```
+INGEST → EXTRACT → CANONICALIZE → HANDLE → STORE → RETRIEVE → AUDIT
+```
+
+Extraction runs **before** canonicalization. That order is the argument: a
+probabilistic tier can only ever *propose*, and the deterministic layer decides.
+It is why a language model in the pipeline does not make the pipeline
+probabilistic.
+
+### What runs in production, precisely
+
+Deployed extraction is **rules only**. GLiNER2 (tier 2) needs `gliner` and
+`torch`, which live in `requirements-ml.txt` and are deliberately **not**
+installed on Railway — production builds stay small. Tier 3 (LLM extraction) is
+off by default behind `EXTRACTOR_LLM_FALLBACK`, needs a provider key on the
+calling account, and **has never run in production**. The tier chips in the
+Playground show which tiers actually ran on each turn, including the ones that
+were attempted and failed.
+
+Known gaps are written down rather than hidden: see
+[`docs/known-issues.md`](docs/known-issues.md).
 
 ---
 
